@@ -141,6 +141,9 @@ camera_fb_t gradImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH, .width=IMG_WIDTH
 camera_fb_t extendedImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
 camera_fb_t jpgImg = {.buf=nullptr, .len=0, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_JPEG, .timestamp={0,0}};
 
+camera_fb_t hsvImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}};
+camera_fb_t maskedImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}};
+
 camera_fb_t houghImgs[MAX_RAD-MIN_RAD+1];
 static constexpr camera_fb_t houghImgTemplate = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
 camera_fb_t finalHoughImg = {.buf=nullptr, .len=houghImgTemplate.len/2, .width=houghImgTemplate.width, .height=houghImgTemplate.height,.format=houghImgTemplate.format, .timestamp={0,0}};
@@ -703,24 +706,28 @@ Color pixelColor(int r, int g, int b) {
   return Color::Other;
 }
 
-void selectColors(camera_fb_t* img, camera_fb_t* redImg) {
+void selectColors(camera_fb_t* img, camera_fb_t* redImg, bool debug = false) {
   memset(redImg->buf, 0, redImg->len);
 
   for (int i = 0; i < redImg->len; i+=3) {
     Color c = pixelColor(img->buf[i], img->buf[i+1], img->buf[i+2]);
     if (c==Color::Red) {
-      redImg->buf[i] = 255;
-      redImg->buf[i+1] = 255;
-      redImg->buf[i+2] = 255;
+
+      if (!debug) {
+        redImg->buf[i] = 255;
+        redImg->buf[i+1] = 255;
+        redImg->buf[i+2] = 255;
+      }
+      else {
+        HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]);
+        redImg->buf[i] = hsv.h/2;
+        redImg->buf[i+1] = hsv.s;
+        redImg->buf[i+2] = hsv.v;
+      }
 
       // redImg->buf[i] = 0;
       // redImg->buf[i+1] = 0;
       // redImg->buf[i+2] = 0;
-
-      // HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]);
-      // redImg->buf[i] = hsv.h/2;
-      // redImg->buf[i+1] = hsv.s;
-      // redImg->buf[i+2] = hsv.v;
     }
     // else if (c==Color::Black) {
     //   redImg->buf[i] = 0;
@@ -733,19 +740,21 @@ void selectColors(camera_fb_t* img, camera_fb_t* redImg) {
     //   redImg->buf[i+2] = 0;
     // }
     else {
-
-      redImg->buf[i] = 0;
-      redImg->buf[i+1] = 0;
-      redImg->buf[i+2] = 0;
+      if (!debug) {
+        redImg->buf[i] = 0;
+        redImg->buf[i+1] = 0;
+        redImg->buf[i+2] = 0;
+      }
+      else {
+        HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]); 
+        redImg->buf[i] = hsv.h/4; // division for differentiation with red parts
+        redImg->buf[i+1] = hsv.s/2;
+        redImg->buf[i+2] = hsv.v/2;
+      }
 
       // redImg->buf[i] = img->buf[i];
       // redImg->buf[i+1] = img->buf[i+1];
       // redImg->buf[i+2] = img->buf[i+2];
-
-      // HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]); 
-      // redImg->buf[i] = hsv.h/4; // differentiation with red parts
-      // redImg->buf[i+1] = hsv.s/2;
-      // redImg->buf[i+2] = hsv.v/2;
 
     }
   }
@@ -862,13 +871,30 @@ void convertToGrayScale(camera_fb_t *pIn, camera_fb_t *pOut, bool weighted=false
   for (uint8_t *r = pIn->buf, *g=pIn->buf+1, *b=pIn->buf+2, *out = pOut->buf; 
         r-pIn->buf < pIn->len; r+=3, g+=3, b+=3, out++) {\
 
-    *out = *r;
+    *out = (*r+*b+*g)/3;
   }
 }
 
-void applyMask(camera_fb_t* inImg, camera_fb_t *maskImg, camera_fb_t *outImg) {
-  
-}
+void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, camera_fb_t *pOutImg) {
+  static const uint8_t threshold = 120;
+  if (pMaskImg->format != PIXFORMAT_GRAYSCALE) logErrorAndRestart("maskImg not grayscale");
+  if (pInImg->format == PIXFORMAT_RGB888 && pOutImg->format == PIXFORMAT_RGB888) {
+    uint8_t *pIn = pInImg->buf, *pMask = pMaskImg->buf, *pOut = pOutImg->buf;
+    for (; pMask-pMaskImg->buf < pMaskImg->len; pIn+=3, pMask++, pOut+=3) {
+      if (*pMask > threshold) {
+        pOut[0] = *pMask;
+        pOut[1] = *pMask;
+        pOut[2] = *pMask;
+      }
+      else {
+        pOut[0] = pIn[0];
+        pOut[1] = pIn[1];
+        pOut[2] = pIn[2];
+      }
+    }
+  }
+  else logErrorAndRestart("Format not supported for pInImg/pOutImg");
+} 
 
 void setup() {
   vTaskDelay(pdMS_TO_TICKS(1000));
@@ -884,7 +910,7 @@ void setup() {
   else                {ESP_LOGW(CAM, "PSRAM not available"); delay(10000); ESP.restart();}
 
   ESP_LOGD(CAM, "Allocating Img Buffers");
-  allocate_camera_fbs({&rgb888Img, &redImg, &gradImg, &extendedImg, &houghImgTotal, &finalHoughImg, &grayImg});
+  allocate_camera_fbs({&rgb888Img, &redImg, &gradImg, &extendedImg, &houghImgTotal, &finalHoughImg, &grayImg, &hsvImg, &maskedImg});
   
   ESP_LOGD(CAM, "Allocating HoughImgs");
   for (int i = 0; camera_fb_t& fb : houghImgs) {
@@ -955,8 +981,15 @@ void loop() {
   {MyFuncTimer _t("selectColors()");
   selectColors(&rgb888Img, &redImg);}
 
+  {MyFuncTimer _t("DEBUG selectColors()");
+  selectColors(&rgb888Img, &hsvImg, true);}
+
+
   {MyFuncTimer _t("calculateGradBuffer()");
   calculateGradBuffer(&redImg, &gradImg);}
+
+  {MyFuncTimer _t("applyMask()");
+  applyMask(&hsvImg, &gradImg, &maskedImg);}
 
   // {MyFuncTimer _t("testImage()");
   // testImage(&gradImg, 0);}
@@ -968,20 +1001,20 @@ void loop() {
   // drawCircle<uint8_t>(&gradImg, 40, 40, 50, 1);}
 
 
-  std::vector<Pixel> maxPixels; int bestR;
-  {MyFuncTimer _t("multipleHoughTransform()");
-  std::tie(bestR, maxPixels) = multipleHoughTransform(&gradImg, &(houghImgs[0]), MIN_RAD, MAX_RAD);}
+  // std::vector<Pixel> maxPixels; int bestR;
+  // {MyFuncTimer _t("multipleHoughTransform()");
+  // std::tie(bestR, maxPixels) = multipleHoughTransform(&gradImg, &(houghImgs[0]), MIN_RAD, MAX_RAD);}
 
-  Pixel maxPixel = maxPixels[bestR-MIN_RAD];
-  ESP_LOGI(CAM, "BestR: %d, Max Pixel: (%d, %d, %d)", bestR, maxPixel.x, maxPixel.y, maxPixel.i);
+  // Pixel maxPixel = maxPixels[bestR-MIN_RAD];
+  // ESP_LOGI(CAM, "BestR: %d, Max Pixel: (%d, %d, %d)", bestR, maxPixel.x, maxPixel.y, maxPixel.i);
 
-  {MyFuncTimer _t("scaleCameraBuffer");
-  // scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
-  scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(0), &finalHoughImg);}
+  // {MyFuncTimer _t("scaleCameraBuffer");
+  // // scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
+  // scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(0), &finalHoughImg);}
 
-  convertToGrayScale(&redImg, &grayImg);
-  camera_fb_t* finalImg = &redImg;
-  drawGuideCircles<uint8_t>(finalImg);
+  // convertToGrayScale(&redImg, &grayImg);
+  camera_fb_t* finalImg = &maskedImg;
+  // drawGuideCircles<uint8_t>(finalImg);
 
   ESP_LOGD(CAM, "Finished processing");
   checkMem("After Processing");
