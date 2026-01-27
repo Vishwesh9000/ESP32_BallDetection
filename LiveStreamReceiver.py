@@ -16,14 +16,20 @@ class StreamApp:
         self.last_raw_frame = None # Stores raw bytes for saving
         
         # UI Elements
-        self.canvas = tk.Label(root, bg = "black", borderwidth=0, highlightthickness=0)
-        self.canvas.pack(fill = "both", expand=True)
+        self.vid_frame = tk.Frame(root, bg='black')
+        self.vid_frame.pack(fill='both', expand=True)
+        self.vid_frame.pack_propagate(False)
+
+        self.canvas = tk.Label(self.vid_frame, bg = "black")
+        self.canvas.place(relx=0.5, rely=0.5, anchor="center")
         
-        btn_frame = tk.Frame(root)
-        btn_frame.pack(fill="x", side="bottom", pady=10)
-        
-        tk.Button(btn_frame, text="Save Frame", command=self.save_image).pack(side="left", padx=20, expand=True)
-        tk.Button(btn_frame, text="Exit", command=self.quit_app, fg="red").pack(side="right", padx=20, expand=True)
+        self.btn_frame = tk.Frame(root, height=50)
+        self.btn_frame.pack(fill="x", side="bottom")
+        self.btn_frame.pack_propagate(False)
+
+        tk.Button(self.btn_frame, text="Save Frame", command=self.save_image).pack(side="left", expand=True, fill="both")
+        tk.Button(self.btn_frame, text="Revert 320x240", command=self.reset_size).pack(side="left", expand=True, fill="both")
+        tk.Button(self.btn_frame, text="Exit", command=self.quit_app, fg="red").pack(side="left", expand=True,  fill="both")
 
 
         self.pending_render = False
@@ -40,6 +46,11 @@ class StreamApp:
         self.root.update()
         self.update_stream()
 
+    def reset_size(self):
+        self.root.geometry("320x290")
+        self.renderImg
+
+
     def on_resize(self, event):
         if self.pending_render == True:
             self.root.after_cancel(self.resize_job_id)
@@ -50,8 +61,13 @@ class StreamApp:
     def renderImg(self):
         if self.pil_img:
             print(f"Rendering Image [len: {len(self.last_raw_frame)}, {self.canvas.winfo_width()=} {self.canvas.winfo_height()=}]")
-            w = self.canvas.winfo_width()
-            h = self.canvas.winfo_height()
+            self.vid_frame.update_idletasks()
+            w = self.vid_frame.winfo_width()
+            h = self.vid_frame.winfo_height()
+            if w/h > 320/240:
+                w = (h*320)//240
+            else:
+                h = (w*240)//320
             resized_pil_img = self.pil_img.resize((w, h), Image.Resampling.NEAREST)
             img_tk = ImageTk.PhotoImage(image=resized_pil_img)
             
