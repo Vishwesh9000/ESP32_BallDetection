@@ -20,8 +20,8 @@ extern "C" {
 #define IMG_WIDTH 320
 #define IMG_HEIGHT 240
 
-#define MIN_RAD 50 //Inclusive
-#define MAX_RAD 55 //Inclusive
+#define MIN_RAD 25 //Inclusive
+#define MAX_RAD 40 //Inclusive
 
 #define IN_RANGE(x,min,max) (((x) < (max)) && ((x) > (min)))
 
@@ -65,7 +65,7 @@ static camera_config_t camera_config = {
 };
 
 
-enum class Color {Red, Black, Brown, Other};
+enum class Color {Red, Blue, Black, Brown, Other};
 enum class Mode {ShowCameraFeed, ShowColors, ShowGradient, ShowHoughTransform, ShowCircles};
 
 struct HSV {
@@ -93,7 +93,7 @@ struct HSV {
   }
 };
 
-// ADD MICROS FUNCTIONALITY
+// TODO: ADD MICROS FUNCTIONALITY
 struct MyFuncTimer {
   private:
   static inline uint32_t static_time=0;
@@ -141,6 +141,9 @@ camera_fb_t gradImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH, .width=IMG_WIDTH
 camera_fb_t extendedImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
 camera_fb_t jpgImg = {.buf=nullptr, .len=0, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_JPEG, .timestamp={0,0}};
 
+camera_fb_t hsvImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}};
+camera_fb_t maskedImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}};
+
 camera_fb_t houghImgs[MAX_RAD-MIN_RAD+1];
 static constexpr camera_fb_t houghImgTemplate = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
 camera_fb_t finalHoughImg = {.buf=nullptr, .len=houghImgTemplate.len/2, .width=houghImgTemplate.width, .height=houghImgTemplate.height,.format=houghImgTemplate.format, .timestamp={0,0}};
@@ -154,22 +157,6 @@ Mode mode = Mode::ShowColors;
 WiFiServer server(8888);
 WiFiClient client;
 
-
-void checkIfCircleCoordinate3isNull(const char* s = "") {
-  if (circleCoordinates[3] == nullptr) {
-    ESP_LOGE(CAM, "[%s]circleCoordinates[3] is null", s);
-    // vTaskDelay(pdMS_TO_TICKS(10000));
-    // ESP.restart();
-  }
-  else if (circleCoordinates[3] != reinterpret_cast<void*>(0x3f91d8a4)) {
-    ESP_LOGE(CAM, "[%s]circleCoordinates[3] is not 0x3f91d8a4, its %p", s, circleCoordinates[3]);
-    // vTaskDelay(pdMS_TO_TICKS(10000));
-  }
-  else {
-    ESP_LOGE(CAM, "[%s]circleCoordinates[3] is correct",s);
-    
-  }
-}
 
 void init_camera(){
   while (esp_camera_init(&camera_config) != ESP_OK) {
@@ -259,11 +246,7 @@ void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2) {
       x2y0 = (y+x2)*3;
       x2y1 = (y1+x2)*3;
       x2y2 = (y2+x2)*3;
-      // if (x == 5) {
-      //   Serial.printf("x0y0: %d, x1y0: %d, x2y0: %d\n", rgb[x0y0], rgb[x1y0], rgb[x2y0]);
-      //   Serial.printf("x0y1: %d, x1y1: %d, x2y1: %d\n", rgb[x0y1], rgb[x1y1], rgb[x2y1]);
-      //   Serial.printf("x0y2: %d, x1y2: %d, x2y2: %d\n", rgb[x0y2], rgb[x1y2], rgb[x2y2]);
-      // }
+      
 
       auto sobel_gx = [&](uint32_t offset) {
         return abs(-((int16_t)rgb[x0y0+offset]) + ((int16_t)rgb[x2y0+offset])
@@ -275,10 +258,6 @@ void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2) {
             -((int16_t)rgb[x0y2+offset]) - 2*((int16_t)rgb[x1y2+offset]) - ((int16_t)rgb[x2y2+offset]));
       };
       
-      // grad[y1+x1] = min(255,max({
-      //   sobel_gx(0), sobel_gx(1), sobel_gx(2),
-      //   sobel_gy(0), sobel_gy(1), sobel_gy(2),
-      // }));
       gradE[y1+x1] = max({
         (sobel_gx(0)+sobel_gy(0))/2,
         (sobel_gx(1)+sobel_gy(1))/2,
@@ -356,10 +335,6 @@ void addToPixelIntensity(T *x, uint16_t i) {
 // OPTIMIZE
 template<typename T> //uint8_t or uint16_t
 void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
-  // if (r==53) {
-  //   checkIfCircleCoordinate3isNull("Start of drawCircle r==53");
-  // }
-  //ESP_LOGD(CAM, "Drawing Circle");
   if (r < MIN_RAD || r > MAX_RAD || r*2+1 > IMG_WIDTH || r*2+1 > IMG_HEIGHT) {
     ESP_LOGE(CAM, "Radius %d is not supported", r);
     delay(10000);
@@ -385,17 +360,11 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
   if (buf == nullptr) {
     ESP_LOGE(CAM, "circleCoordinates[%d] is null for radius %d (%d, %d)", r-MIN_RAD, r, MIN_RAD, MAX_RAD);
   }
-  // else if (r==53) {
-  //   ESP_LOGE(CAM, "buf[0,1,2,3] for r = 53 is %d %d %d %d", buf[0], buf[1], buf[2], buf[3]);
-  // }
+  
 
   int height = fb->height, width = fb->width;
-  // if (r==53) {
-  // // ESP_LOGD(CAM, "Drawing circle at (%d, %d) with radius %d and %d intensity circle", cx, cy, r, intensity);
-  //   // if (cx == 195) vTaskDelay(pdMS_TO_TICKS(100000));
-  // }
-
-  if (cy-r >= 0 && cy+r < fb->height && cx-r >= 0 && cx+r < fb->width) {
+  
+  if (cy-r >= 0 && cy+r < height && cx-r >= 0 && cx+r < fb->width) {
     // No chance of out of bounds
     // ESP_LOGV(CAM, "Drawing non-colliding circle");
 
@@ -446,7 +415,7 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
     // }
 
     // Top, Botton, Right, and Left points
-    if (cy+r < fb->height) addToPixelIntensity<T>(&gray[(fb->width) * (cy+r) + cx] , intensity);
+    if (cy+r < height) addToPixelIntensity<T>(&gray[(fb->width) * (cy+r) + cx] , intensity);
     if (cy-r >= 0)         addToPixelIntensity<T>(&gray[(fb->width) * (cy-r) + cx] , intensity);
     if (cx+r < fb->width)  addToPixelIntensity<T>(&gray[(fb->width) * (cy) + cx+r] , intensity);
     if (cx-r >= 0)         addToPixelIntensity<T>(&gray[(fb->width) * (cy) + cx-r] , intensity);
@@ -531,38 +500,10 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
         addToPixelIntensity<T>(&gray[(cy+i) * width + (cx+buf[i])], intensity);
       }
     }
-
-    
-
-
-    // for (int i = 0; i < r; i++) {
-    //   if (buf[i]==0) break;
-
-    //   if (cy+buf[i] <   fb->height && cx+i    < fb->width) addToPixelIntensity<T>(&gray[(fb->width) * (cy+buf[i]) + cx+i+1]    , intensity);
-    //   if (cy+i    <   fb->height && cx+buf[i] < fb->width) addToPixelIntensity<T>(&gray[(fb->width) * (cy+i+1)    + cx+buf[i]] , intensity);
-    //   if (cy-i    >=  0          && cx+buf[i] < fb->width) addToPixelIntensity<T>(&gray[(fb->width) * (cy-i-1)    + cx+buf[i]] , intensity);
-    //   if (cy-buf[i] >=  0          && cx+i    < fb->width) addToPixelIntensity<T>(&gray[(fb->width) * (cy-buf[i]) + cx+i+1]    , intensity);
-    //   if (cy-buf[i] >=  0          && cx-i    >= 0)        addToPixelIntensity<T>(&gray[(fb->width) * (cy-buf[i]) + cx-i-1]    , intensity);
-    //   if (cy-i    >=  0          && cx-buf[i] >= 0)        addToPixelIntensity<T>(&gray[(fb->width) * (cy-i-1)    + cx-buf[i]] , intensity);
-    //   if (cy+i    <   fb->height && cx-buf[i] >= 0)        addToPixelIntensity<T>(&gray[(fb->width) * (cy+i+1)    + cx-buf[i]] , intensity);
-    //   if (cy+buf[i] <   fb->height && cx-i    >= 0)        addToPixelIntensity<T>(&gray[(fb->width) * (cy+buf[i]) + cx-i-1]    , intensity);
-    // }
   }
-  // if (r==53) {
-  //   if (circleCoordinates[3] == nullptr) {
-  //     ESP_LOGE(CAM, "circleCoordinates[3] is null");
-  //     vTaskDelay(pdMS_TO_TICKS(10000));
-  //     ESP.restart();
-  //   }
-  //   else {
-  //     ESP_LOGE(CAM, "circleCoordinates[3] is not null");
-  //     // vTaskDelay(pdMS_TO_TICKS(10000));
-  //   }
-  // }
 }
 
 void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
-  // if (r==53) {checkIfCircleCoordinate3isNull("houghTrans r==53 beginning");}
   if (pInImg->format != PIXFORMAT_GRAYSCALE && pOutImg->format != PIXFORMAT_GRAYSCALE) {
     ESP_LOGE(CAM, "Hough transform can only be used on grayscale images");
     vTaskDelay(pdMS_TO_TICKS(10000));
@@ -573,26 +514,14 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
     vTaskDelay(pdMS_TO_TICKS(10000));
     ESP.restart();
   }
-  // if (r==53) {checkIfCircleCoordinate3isNull("houghTrans r==53 before memset");
-  //   ESP_LOGE(DEBUG, "Values: circleCoordinates[3]: %p, pOutImg->buf: %p, pOutImg->len: %u", circleCoordinates[3], pOutImg->buf, pOutImg->len);
-  // }
-  
   
   memset(pOutImg->buf, 0, pOutImg->len);
-  // if (r==53) {checkIfCircleCoordinate3isNull("houghTrans r==53 after memset");}
-  // memset(extendedImg.buf, 0, extendedImg.len);
-  // 0x3f91d8a4 0x3f91da0a
+  
   uint8_t *inBuf = pInImg->buf;
   
   for (int y = 0; y < pInImg->height; y++) {
     for (int x = 0; x < pInImg->width; x++) {
         if (inBuf[(pInImg->width)*y+x] > 0) {
-          // if (r==53) {
-          //   checkIfCircleCoordinate3isNull("HoughTransform r==53 loop");
-          // }
-        
-          // ESP_LOGD(CAM, "Intensity: %d",  buf[(img->width)*y+x]);
-          // drawCircle<uint16_t>(&extendedImg, x, y, r, inBuf[(pInImg->width)*y+x]);
           drawCircle<uint16_t>(pOutImg, x, y, r, inBuf[(pInImg->width)*y+x]);
         }
     }
@@ -613,11 +542,10 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
   // }
 }
 
+//TODO: Implement ptrs instead of returns
 std::pair<int, std::vector<Pixel>> multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pOutImgs, int minR, int maxR) { //minR and maxR are inclusive; pOutmgs should be a pointer to maxR-minR+1 camera_fb_t's
   std::vector<Pixel> maxPixels; maxPixels.reserve(maxR-minR+1);
-  // checkIfCircleCoordinate3isNull();
   for (int r = minR, i = 0; r <= maxR; r++, i++) {
-    // if (r==53) {checkIfCircleCoordinate3isNull();}
     houghTransform(pInImg, pOutImgs+i, r);
     maxPixels.push_back(std::move(findMaxPixel<uint16_t>(pOutImgs+i)));
   }
@@ -685,6 +613,7 @@ Color pixelColor(int r, int g, int b) {
   
   // return Color::Other;
   HSV hsv(r,g,b);
+  if (IN_RANGE(hsv.h, 240, 360)) return Color::Blue;
   // if (hsv.v<60 && hsv.s < 80) return Color::Black;
 
 
@@ -693,9 +622,19 @@ Color pixelColor(int r, int g, int b) {
   // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 100 && IN_RANGE(hsv.v, 90, 140)) return Color::Red; //Good Lamp Light Home Phone Flashlight
 
 
-  // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 90, 140)) return Color::Red; 
+  // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 90, 140)) return Color::Red;
+  //OG
+  // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
+
+  // V1
   if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
 
+  // V2
+  // Extremely high saturation
+  // if (hsv.s x> 160) return Color::Red; 
+  //Way to selective (balls not round) + tons of bg noise
+
+  // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
 
   
   // if (hsv.h > 60 && hsv.h < 120 && hsv.s > 40 && hsv.v > 40 && hsv.v < 100) return Color::Brown;
@@ -703,49 +642,38 @@ Color pixelColor(int r, int g, int b) {
   return Color::Other;
 }
 
-void selectColors(camera_fb_t* img, camera_fb_t* redImg) {
+void selectColors(camera_fb_t* img, camera_fb_t* redImg, Color color, bool debug = false) {
   memset(redImg->buf, 0, redImg->len);
 
   for (int i = 0; i < redImg->len; i+=3) {
     Color c = pixelColor(img->buf[i], img->buf[i+1], img->buf[i+2]);
-    if (c==Color::Red) {
-      redImg->buf[i] = 255;
-      redImg->buf[i+1] = 255;
-      redImg->buf[i+2] = 255;
 
-      // redImg->buf[i] = 0;
-      // redImg->buf[i+1] = 0;
-      // redImg->buf[i+2] = 0;
-
-      // HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]);
-      // redImg->buf[i] = hsv.h/2;
-      // redImg->buf[i+1] = hsv.s;
-      // redImg->buf[i+2] = hsv.v;
+    if (c == color) {
+      if (!debug) {
+        redImg->buf[i] = 255;
+        redImg->buf[i+1] = 255;
+        redImg->buf[i+2] = 255;
+      }
+      else {
+        HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]);
+        redImg->buf[i] = hsv.h/2;
+        redImg->buf[i+1] = hsv.s;
+        redImg->buf[i+2] = hsv.v;
+      }
     }
-    // else if (c==Color::Black) {
-    //   redImg->buf[i] = 0;
-    //   redImg->buf[i+1] = 0;
-    //   redImg->buf[i+2] = 255;
-    // }
-    // else if (c==Color::Brown) {
-    //   redImg->buf[i] = 0;
-    //   redImg->buf[i+1] = 255;
-    //   redImg->buf[i+2] = 0;
-    // }
+
     else {
-
-      redImg->buf[i] = 0;
-      redImg->buf[i+1] = 0;
-      redImg->buf[i+2] = 0;
-
-      // redImg->buf[i] = img->buf[i];
-      // redImg->buf[i+1] = img->buf[i+1];
-      // redImg->buf[i+2] = img->buf[i+2];
-
-      // HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]); 
-      // redImg->buf[i] = hsv.h/4; // differentiation with red parts
-      // redImg->buf[i+1] = hsv.s/2;
-      // redImg->buf[i+2] = hsv.v/2;
+      if (!debug) {
+        redImg->buf[i] = 0;
+        redImg->buf[i+1] = 0;
+        redImg->buf[i+2] = 0;
+      }
+      else {
+        HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]); 
+        redImg->buf[i] = hsv.h/4; // division for differentiation with focused parts
+        redImg->buf[i+1] = hsv.s/2;
+        redImg->buf[i+2] = hsv.v/2;
+      }
 
     }
   }
@@ -850,9 +778,9 @@ void logErrorAndRestart(const char* s) {
 }
 
 template<typename T>
-void drawGuideCircles(camera_fb_t *fb) {
-  drawCircle<T>(fb, MAX_RAD, MAX_RAD, MIN_RAD, 50);
-  drawCircle<T>(fb, MAX_RAD, MAX_RAD, MAX_RAD, 50);
+void drawGuideCircles(camera_fb_t *fb, uint32_t intensity) {
+  drawCircle<T>(fb, MAX_RAD, MAX_RAD, MIN_RAD, intensity);
+  drawCircle<T>(fb, MAX_RAD, MAX_RAD, MAX_RAD, intensity);
 }
 
 void convertToGrayScale(camera_fb_t *pIn, camera_fb_t *pOut, bool weighted=false) {
@@ -862,13 +790,30 @@ void convertToGrayScale(camera_fb_t *pIn, camera_fb_t *pOut, bool weighted=false
   for (uint8_t *r = pIn->buf, *g=pIn->buf+1, *b=pIn->buf+2, *out = pOut->buf; 
         r-pIn->buf < pIn->len; r+=3, g+=3, b+=3, out++) {\
 
-    *out = *r;
+    *out = (*r+*b+*g)/3;
   }
 }
 
-void applyMask(camera_fb_t* inImg, camera_fb_t *maskImg, camera_fb_t *outImg) {
-  
-}
+void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, camera_fb_t *pOutImg) {
+  static const uint8_t threshold = 120;
+  if (pMaskImg->format != PIXFORMAT_GRAYSCALE) logErrorAndRestart("maskImg not grayscale");
+  if (pInImg->format == PIXFORMAT_RGB888 && pOutImg->format == PIXFORMAT_RGB888) {
+    uint8_t *pIn = pInImg->buf, *pMask = pMaskImg->buf, *pOut = pOutImg->buf;
+    for (; pMask-pMaskImg->buf < pMaskImg->len; pIn+=3, pMask++, pOut+=3) {
+      if (*pMask > threshold) {
+        pOut[0] = *pMask;
+        pOut[1] = *pMask;
+        pOut[2] = *pMask;
+      }
+      else {
+        pOut[0] = pIn[0];
+        pOut[1] = pIn[1];
+        pOut[2] = pIn[2];
+      }
+    }
+  }
+  else logErrorAndRestart("Format not supported for pInImg/pOutImg");
+} 
 
 void setup() {
   vTaskDelay(pdMS_TO_TICKS(1000));
@@ -884,7 +829,7 @@ void setup() {
   else                {ESP_LOGW(CAM, "PSRAM not available"); delay(10000); ESP.restart();}
 
   ESP_LOGD(CAM, "Allocating Img Buffers");
-  allocate_camera_fbs({&rgb888Img, &redImg, &gradImg, &extendedImg, &houghImgTotal, &finalHoughImg, &grayImg});
+  allocate_camera_fbs({&rgb888Img, &redImg, &gradImg, &extendedImg, &houghImgTotal, &finalHoughImg, &grayImg, &hsvImg, &maskedImg});
   
   ESP_LOGD(CAM, "Allocating HoughImgs");
   for (int i = 0; camera_fb_t& fb : houghImgs) {
@@ -911,7 +856,6 @@ void setup() {
     calcCircleCoordinates(circleCoordinates[i], MIN_RAD+i);
   }
   ESP_LOGE(DEBUG, "circle 3 %p", circleCoordinates+3);
-  // checkIfCircleCoordinate3isNull("After init");
 
   ESP_LOGD(CAM, "Allocated all buffers");
   checkMem("After Allocation", 1);
@@ -938,7 +882,7 @@ void setup() {
 }
 
 void loop() {
-  // checkIfCircleCoordinate3isNull("Start of Loop");
+
   MyFuncTimer _t("LOOP");
   // ESP_LOGI(CAM, "LOOPING");
   ESP_LOGV(CAM, "cam_task stack watermark: %d bytes\n", uxTaskGetStackHighWaterMark(NULL));
@@ -953,19 +897,17 @@ void loop() {
   // testImage(&rgb888Img, 0);
 
   {MyFuncTimer _t("selectColors()");
-  selectColors(&rgb888Img, &redImg);}
+  selectColors(&rgb888Img, &redImg, Color::Blue);}
+
+  {MyFuncTimer _t("DEBUG selectColors()");
+  selectColors(&rgb888Img, &hsvImg, Color::Blue, true);}
+
 
   {MyFuncTimer _t("calculateGradBuffer()");
   calculateGradBuffer(&redImg, &gradImg);}
 
-  // {MyFuncTimer _t("testImage()");
-  // testImage(&gradImg, 0);}
-
-  // {MyFuncTimer _t("drawCircle() {non-Colliding}");
-  // drawCircle<uint8_t>(&gradImg, 201, 202, 53, 1);}
-
-  // {MyFuncTimer _t("drawCircle() {Colliding}");
-  // drawCircle<uint8_t>(&gradImg, 40, 40, 50, 1);}
+  {MyFuncTimer _t("applyMask()");
+  applyMask(&hsvImg, &gradImg, &maskedImg);}
 
 
   std::vector<Pixel> maxPixels; int bestR;
@@ -976,12 +918,15 @@ void loop() {
   ESP_LOGI(CAM, "BestR: %d, Max Pixel: (%d, %d, %d)", bestR, maxPixel.x, maxPixel.y, maxPixel.i);
 
   {MyFuncTimer _t("scaleCameraBuffer");
-  // scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
-  scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(0), &finalHoughImg);}
+  scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
 
-  convertToGrayScale(&redImg, &grayImg);
-  camera_fb_t* finalImg = &redImg;
-  drawGuideCircles<uint8_t>(finalImg);
+  
+  convertToGrayScale(&rgb888Img, &grayImg);
+  drawCircle<uint8_t>(&grayImg, maxPixel.x, maxPixel.y, bestR, 200);
+  
+  camera_fb_t* finalImg = &grayImg;
+  
+  drawGuideCircles<uint8_t>(finalImg, 200);
 
   ESP_LOGD(CAM, "Finished processing");
   checkMem("After Processing");
