@@ -8,7 +8,7 @@ class StreamApp:
     def __init__(self, root):
         self.root = root
         self.root.title("ESP32 Live Stream")
-        self.root.geometry("640x480")
+        self.root.geometry("320x290")
         
         # Socket Setup
         self.addr = ('192.168.4.1', 8888)
@@ -104,11 +104,12 @@ class StreamApp:
 
     def save_image(self):
         if self.last_raw_frame:
+            save_frame = self.last_raw_frame
             path = filedialog.asksaveasfilename(defaultextension=".jpg",
                                                filetypes=[("JPEG", "*.jpg")])
             if path:
                 with open(path, "wb") as f:
-                    f.write(self.last_raw_frame)
+                    f.write(save_frame)
 
     def quit_app(self):
         self.s.close()
