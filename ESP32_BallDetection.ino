@@ -121,8 +121,7 @@ struct MyFuncTimer {
 };
 
 struct Coordinate {
-  uint16_t x;
-  uint16_t y; 
+  uint16_t x, y; 
 };
 
 struct Pixel {
@@ -368,31 +367,31 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
     // No chance of out of bounds
     // ESP_LOGV(CAM, "Drawing non-colliding circle");
 
-    addToPixelIntensity<T>(&gray[(fb->width) * (cy+r) + cx]   ,intensity);
-    addToPixelIntensity<T>(&gray[(fb->width) * (cy-r) + cx]   ,intensity);
-    addToPixelIntensity<T>(&gray[(fb->width) * (cy)   + cx+r] ,intensity);
-    addToPixelIntensity<T>(&gray[(fb->width) * (cy)   + cx-r] ,intensity);
+    addToPixelIntensity<T>(&gray[(width) * (cy+r) + cx]   ,intensity);
+    addToPixelIntensity<T>(&gray[(width) * (cy-r) + cx]   ,intensity);
+    addToPixelIntensity<T>(&gray[(width) * (cy)   + cx+r] ,intensity);
+    addToPixelIntensity<T>(&gray[(width) * (cy)   + cx-r] ,intensity);
 
     for (int i = 1; i < r; i++) {
       if (buf[i]<=i) {
         if (buf[i] == i) {
-          addToPixelIntensity<T>(&gray[(fb->width) * (cy+buf[i]) + cx+i]    , intensity);
-          addToPixelIntensity<T>(&gray[(fb->width) * (cy-i)    + cx+buf[i]] , intensity);
-          addToPixelIntensity<T>(&gray[(fb->width) * (cy-buf[i]) + cx-i]    , intensity);
-          addToPixelIntensity<T>(&gray[(fb->width) * (cy+i)    + cx-buf[i]] , intensity);
+          addToPixelIntensity<T>(&gray[(width) * (cy+buf[i]) + cx+i]    , intensity);
+          addToPixelIntensity<T>(&gray[(width) * (cy-i)    + cx+buf[i]] , intensity);
+          addToPixelIntensity<T>(&gray[(width) * (cy-buf[i]) + cx-i]    , intensity);
+          addToPixelIntensity<T>(&gray[(width) * (cy+i)    + cx-buf[i]] , intensity);
         }
         break;
       }
 
       ESP_LOGV(CAM, "Drawing Coordinate (%d, %d)", i, buf[i]);
-      addToPixelIntensity<T>(&gray[(fb->width) * (cy+buf[i]) + cx+i]    , intensity);
-      addToPixelIntensity<T>(&gray[(fb->width) * (cy+i)    + cx+buf[i]] , intensity);
-      addToPixelIntensity<T>(&gray[(fb->width) * (cy-i)    + cx+buf[i]] , intensity);
-      addToPixelIntensity<T>(&gray[(fb->width) * (cy-buf[i]) + cx+i]    , intensity);
-      addToPixelIntensity<T>(&gray[(fb->width) * (cy-buf[i]) + cx-i]    , intensity);
-      addToPixelIntensity<T>(&gray[(fb->width) * (cy-i)    + cx-buf[i]] , intensity);
-      addToPixelIntensity<T>(&gray[(fb->width) * (cy+i)    + cx-buf[i]] , intensity);
-      addToPixelIntensity<T>(&gray[(fb->width) * (cy+buf[i]) + cx-i]    , intensity);
+      addToPixelIntensity<T>(&gray[(width) * (cy+buf[i]) + cx+i]    , intensity);
+      addToPixelIntensity<T>(&gray[(width) * (cy+i)    + cx+buf[i]] , intensity);
+      addToPixelIntensity<T>(&gray[(width) * (cy-i)    + cx+buf[i]] , intensity);
+      addToPixelIntensity<T>(&gray[(width) * (cy-buf[i]) + cx+i]    , intensity);
+      addToPixelIntensity<T>(&gray[(width) * (cy-buf[i]) + cx-i]    , intensity);
+      addToPixelIntensity<T>(&gray[(width) * (cy-i)    + cx-buf[i]] , intensity);
+      addToPixelIntensity<T>(&gray[(width) * (cy+i)    + cx-buf[i]] , intensity);
+      addToPixelIntensity<T>(&gray[(width) * (cy+buf[i]) + cx-i]    , intensity);
 
       
     }
@@ -415,10 +414,10 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
     // }
 
     // Top, Botton, Right, and Left points
-    if (cy+r < height) addToPixelIntensity<T>(&gray[(fb->width) * (cy+r) + cx] , intensity);
-    if (cy-r >= 0)         addToPixelIntensity<T>(&gray[(fb->width) * (cy-r) + cx] , intensity);
-    if (cx+r < fb->width)  addToPixelIntensity<T>(&gray[(fb->width) * (cy) + cx+r] , intensity);
-    if (cx-r >= 0)         addToPixelIntensity<T>(&gray[(fb->width) * (cy) + cx-r] , intensity);
+    if (cy+r < height) addToPixelIntensity<T>(&gray[(width) * (cy+r) + cx] , intensity);
+    if (cy-r >= 0)         addToPixelIntensity<T>(&gray[(width) * (cy-r) + cx] , intensity);
+    if (cx+r < fb->width)  addToPixelIntensity<T>(&gray[(width) * (cy) + cx+r] , intensity);
+    if (cx-r >= 0)         addToPixelIntensity<T>(&gray[(width) * (cy) + cx-r] , intensity);
 
     // Q1 Top 1/8
     int i = 1;
@@ -543,15 +542,19 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
 }
 
 //TODO: Implement ptrs instead of returns
-std::pair<int, std::vector<Pixel>> multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pOutImgs, int minR, int maxR) { //minR and maxR are inclusive; pOutmgs should be a pointer to maxR-minR+1 camera_fb_t's
-  std::vector<Pixel> maxPixels; maxPixels.reserve(maxR-minR+1);
+//minR and maxR are inclusive; pOutmgs should be a pointer to maxR-minR+1 camera_fb_t's
+int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pOutImgs, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels) {
   for (int r = minR, i = 0; r <= maxR; r++, i++) {
     houghTransform(pInImg, pOutImgs+i, r);
-    maxPixels.push_back(std::move(findMaxPixel<uint16_t>(pOutImgs+i)));
+    (*pMaxPixels)[i].reserve(10);
+    pixelsAboveThreshold<uint16_t>(pOutImgs+i, &((*pMaxPixels)[i]), 16384); // 8192, 12288, 16384, 20480
   }
-  auto maxPixel = std::max_element(maxPixels.begin(), maxPixels.end(), [](Pixel a, Pixel b) {return a.i<b.i;});
-  int bestR = maxPixel-maxPixels.begin()+minR;
-  return {bestR, std::move(maxPixels)};
+  auto maxPixel = std::max_element(pMaxPixels->begin(), pMaxPixels->end(), [](const std::vector<Pixel>& a, const std::vector<Pixel>& b) {
+    if (b.empty()) return false; // a can never be less than empty b
+    if (a.empty()) return true;
+    return a[0].i<b[0].i;});
+  int bestR = maxPixel-pMaxPixels->begin()+minR;
+  return bestR;
 }
 
 void checkMem(const char* msg, bool level=0) {
@@ -706,28 +709,103 @@ void testImage(camera_fb_t* img, int pattern) {
   }
 }
 
-void printImg(camera_fb_t* img) {
+void printImg(camera_fb_t* img, bool optimized=false) {
+  // Chars: . , ` ' " ^ * : o O Q 0 & % # @    // Extended List: . , ` ' " ^ * : - + = o s x z O Q 0 & % # @ M W $
   uint8_t* buf = img->buf;
-  for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
-    for (uint32_t x = 0; x < IMG_WIDTH; x++) {
-      if (img->format == PIXFORMAT_RGB888) {
-        uint8_t i = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
-        if (i == 0) Serial.print(" ");
-        else if (i < 64) Serial.print(".");
-        else if (i < 128) Serial.print("o");
-        else if (i < 192) Serial.print("x");
-        else Serial.print("#");
+
+  if (!optimized) {
+    for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
+      for (uint32_t x = 0; x < IMG_WIDTH; x++) {
+        if (img->format == PIXFORMAT_RGB888) {
+          uint8_t i = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
+          if (i == 0) Serial.print(" ");
+          else if (i <= 16) Serial.print(".");
+          else if (i <= 32) Serial.print(",");
+          else if (i <= 48) Serial.print("`");
+          else if (i <= 64) Serial.print("'");
+          else if (i <= 80) Serial.print("\"");
+          else if (i <= 96) Serial.print("^");
+          else if (i <= 112) Serial.print("*");
+          else if (i <= 128) Serial.print(":");
+          else if (i <= 144) Serial.print("o");
+          else if (i <= 160) Serial.print("O");
+          else if (i <= 186) Serial.print("Q");
+          else if (i <= 192) Serial.print("0");
+          else if (i <= 208) Serial.print("&");
+          else if (i <= 224) Serial.print("%");
+          else if (i <= 240) Serial.print("#");
+          else Serial.print("@");
+        }
+        else if (img->format == PIXFORMAT_GRAYSCALE) {
+          uint8_t i = buf[y+x];
+          if (i == 0) Serial.print(" ");
+          else if (i <= 16) Serial.print(".");
+          else if (i <= 32) Serial.print(",");
+          else if (i <= 48) Serial.print("`");
+          else if (i <= 64) Serial.print("'");
+          else if (i <= 80) Serial.print("\"");
+          else if (i <= 96) Serial.print("^");
+          else if (i <= 112) Serial.print("*");
+          else if (i <= 128) Serial.print(":");
+          else if (i <= 144) Serial.print("o");
+          else if (i <= 160) Serial.print("O");
+          else if (i <= 186) Serial.print("Q");
+          else if (i <= 192) Serial.print("0");
+          else if (i <= 208) Serial.print("&");
+          else if (i <= 224) Serial.print("%");
+          else if (i <= 240) Serial.print("#");
+          else Serial.print("@");
+        }
       }
-      else if (img->format == PIXFORMAT_GRAYSCALE) {
-        uint8_t i = buf[y+x];
-        if (i == 0) Serial.print(" ");
-        else if (i < 64) Serial.print(".");
-        else if (i < 128) Serial.print("o");
-        else if (i < 192) Serial.print("x");
-        else Serial.print("#");
-      }
+      Serial.println();
     }
-    Serial.println();
+  }
+  else {
+    for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
+      for (uint32_t x = 0; x < IMG_WIDTH; x++) {
+        if (img->format == PIXFORMAT_RGB888) {
+          uint8_t i = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
+          if (i == 0) Serial.print(" ");
+          else if (i <= 16) Serial.print(".");
+          else if (i <= 32) Serial.print(",");
+          else if (i <= 48) Serial.print("`");
+          else if (i <= 64) Serial.print("'");
+          else if (i <= 80) Serial.print("\"");
+          else if (i <= 96) Serial.print("^");
+          else if (i <= 112) Serial.print("*");
+          else if (i <= 128) Serial.print(":");
+          else if (i <= 144) Serial.print("o");
+          else if (i <= 160) Serial.print("O");
+          else if (i <= 186) Serial.print("Q");
+          else if (i <= 192) Serial.print("0");
+          else if (i <= 208) Serial.print("&");
+          else if (i <= 224) Serial.print("%");
+          else if (i <= 240) Serial.print("#");
+          else Serial.print("@");
+        }
+        else if (img->format == PIXFORMAT_GRAYSCALE) {
+          uint8_t i = buf[y+x];
+          if (i == 0) Serial.print(" ");
+          else if (i <= 16) Serial.print(".");
+          else if (i <= 32) Serial.print(",");
+          else if (i <= 48) Serial.print("`");
+          else if (i <= 64) Serial.print("'");
+          else if (i <= 80) Serial.print("\"");
+          else if (i <= 96) Serial.print("^");
+          else if (i <= 112) Serial.print("*");
+          else if (i <= 128) Serial.print(":");
+          else if (i <= 144) Serial.print("o");
+          else if (i <= 160) Serial.print("O");
+          else if (i <= 186) Serial.print("Q");
+          else if (i <= 192) Serial.print("0");
+          else if (i <= 208) Serial.print("&");
+          else if (i <= 224) Serial.print("%");
+          else if (i <= 240) Serial.print("#");
+          else Serial.print("@");
+        }
+      }
+      Serial.println();
+    }
   }
   Serial.print("\n\n");
 }
@@ -747,6 +825,22 @@ Pixel findMaxPixel(camera_fb_t *img) {
     uint16_t x = length % img->width, y = length / img->width;
     return {x,y,*maxptr};
   }
+  else logErrorAndRestart("Type Not Supported for findMax Pixel");
+}
+
+template<typename T>
+void pixelsAboveThreshold(camera_fb_t *img, std::vector<Pixel> *pixels, const int t) {
+  if (img->format != PIXFORMAT_GRAYSCALE) logErrorAndRestart("Image format to pixelsAboveThreshold not supported");
+  T* ptr = reinterpret_cast<T*>(img->buf), *static_ptr = ptr;
+  for (; ptr-static_ptr < img->len/sizeof(T); ptr++) {
+    if (*ptr > t) {
+      int x, y;
+      x = (ptr-static_ptr) % IMG_WIDTH;
+      y = (ptr-static_ptr) / IMG_WIDTH;
+      pixels->emplace_back(x,y,*ptr);
+    }
+  }
+  std::sort(pixels->begin(), pixels->end(), [](const Pixel& a, const Pixel& b) {return a.i > b.i;});
 }
 
 // IMPLEMENT ADAPTIVE SCALING
@@ -814,6 +908,38 @@ void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, camera_fb_t *pOutImg)
   }
   else logErrorAndRestart("Format not supported for pInImg/pOutImg");
 } 
+
+void findBalls(std::vector<std::vector<Pixel>> *pixels, std::vector<Pixel> *final_balls) {
+  size_t num_pixels = 0;
+  for (const auto& inner : *pixels) {
+    num_pixels += inner.size();
+  }
+
+  static std::vector<Pixel> balls; 
+  balls.clear(); balls.reserve(num_pixels);
+  for (const auto &inner : *pixels) {
+    balls.insert(balls.end(), inner.begin(), inner.end());
+  }
+
+  std::sort(balls.begin(), balls.end(), [](const Pixel& a, const Pixel& b) {return a.i > b.i;});
+
+  final_balls->clear();
+  static auto is_overlapping = [](const Pixel& a, const Pixel& b) {
+    if (std::abs(static_cast<int32_t>(a.x)-static_cast<int32_t>(b.x)) < MIN_RAD && std::abs(static_cast<int32_t>(a.y) - static_cast<int32_t>(b.y)) < MIN_RAD) return true;
+    else return false;
+  };
+  for (const auto& ball : balls) {
+    if (final_balls->empty()) {
+      final_balls->push_back(ball);
+      continue;
+    }
+    bool is_distinct = true;
+    for (const auto &prev_ball : *final_balls) {
+      if (is_overlapping(prev_ball, ball)) is_distinct = false;
+    }
+    if (is_distinct) final_balls->push_back(ball);
+  }
+}
 
 void setup() {
   vTaskDelay(pdMS_TO_TICKS(1000));
@@ -910,20 +1036,41 @@ void loop() {
   applyMask(&hsvImg, &gradImg, &maskedImg);}
 
 
-  std::vector<Pixel> maxPixels; int bestR;
+  std::vector<std::vector<Pixel>> maxPixels; int bestR;
+  maxPixels.resize(MAX_RAD-MIN_RAD+1);
   {MyFuncTimer _t("multipleHoughTransform()");
-  std::tie(bestR, maxPixels) = multipleHoughTransform(&gradImg, &(houghImgs[0]), MIN_RAD, MAX_RAD);}
+  bestR = multipleHoughTransform(&gradImg, &(houghImgs[0]), MIN_RAD, MAX_RAD, &maxPixels);}
+  if (!maxPixels[bestR-MIN_RAD].empty()) {
+    Pixel maxPixel = maxPixels[bestR-MIN_RAD][0];
+    ESP_LOGI(CAM, "BestR: %d, Max Pixel: (%d, %d, %d)", bestR, maxPixel.x, maxPixel.y, maxPixel.i);
+    for (int r = MIN_RAD; r <= MAX_RAD; r++) {
+      Serial.printf("Radius %d:\n", r);
+      for (const Pixel& p : maxPixels[r-MIN_RAD]) {
+        Serial.printf("\t(%d, %d): %d\n", p.x, p.y, p.i);
+      }
+      Serial.print("\n");
+    }
+    Serial.print("\n");
 
-  Pixel maxPixel = maxPixels[bestR-MIN_RAD];
-  ESP_LOGI(CAM, "BestR: %d, Max Pixel: (%d, %d, %d)", bestR, maxPixel.x, maxPixel.y, maxPixel.i);
+    static std::vector<Pixel> balls; balls.clear();
+    findBalls(&maxPixels, &balls);
+    Serial.println("Balls found:");
+    for (const auto& ball : balls) {
+      Serial.printf("\t(%d, %d): %d\n", ball.x, ball.y, ball.i);
+    }
+    {MyFuncTimer _t("scaleCameraBuffer");
+    scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
+    
+    convertToGrayScale(&rgb888Img, &grayImg);
+    for (const auto& ball : balls) {
+      drawCircle<uint8_t>(&grayImg, ball.x, ball.y, bestR, 200);
+    }
+  }
+  else {
+    Serial.println("No circles detected");
+    convertToGrayScale(&rgb888Img, &grayImg);
+  }
 
-  {MyFuncTimer _t("scaleCameraBuffer");
-  scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
-
-  
-  convertToGrayScale(&rgb888Img, &grayImg);
-  drawCircle<uint8_t>(&grayImg, maxPixel.x, maxPixel.y, bestR, 200);
-  
   camera_fb_t* finalImg = &grayImg;
   
   drawGuideCircles<uint8_t>(finalImg, 200);
@@ -936,6 +1083,8 @@ void loop() {
       Serial.println("Client Connected");
     }
     else {
+      {MyFuncTimer _t("Normal printImg");
+      printImg(&finalHoughImg);}
       ESP_LOGI(CAM, "No client, delaying ...");
       vTaskDelay(pdMS_TO_TICKS(2000));
     }
