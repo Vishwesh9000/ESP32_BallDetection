@@ -515,7 +515,7 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
         ESP.restart();
     }
   
-    memset(pOutImg->buf, 0, pOutImg->len);
+    resetImg(pOutImg);
   
     uint8_t *inBuf = pInImg->buf;
   
@@ -548,7 +548,7 @@ int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pOutImgs, int minR,
     for (int r = minR, i = 0; r <= maxR; r++, i++) {
         houghTransform(pInImg, pOutImgs+i, r);
         (*pMaxPixels)[i].reserve(10);
-        pixelsAboveThreshold<uint16_t>(pOutImgs+i, &((*pMaxPixels)[i]), 16384); // 8192, 12288, 16384, 20480
+        pixelsAboveThreshold<uint16_t>(pOutImgs+i, &((*pMaxPixels)[i]), 12288); // 8192, 12288, 16384, 20480
     }
     auto maxPixel = std::max_element(pMaxPixels->begin(), pMaxPixels->end(), [](const std::vector<Pixel>& a, const std::vector<Pixel>& b) {
         if (b.empty()) return false; // a can never be less than empty b
@@ -711,45 +711,52 @@ void testImage(camera_fb_t* img, int pattern) {
 }
 
 void printImg(camera_fb_t* img) {
-    // Chars: . , ` ' " ^ * : o O Q 0 & % # @    // Extended List: . , ` ' " ^ * : - + = o s x z O Q 0 & % # @ M W $
+    // Chars: . , ' " ^ * : o O Q 0 & % # @    // Extended List: . , ` ' " ^ * : - + = o s x z O Q 0 & % # @ M W $
+    const uint8_t charLU[] = " .,'\"^*:oOQ0&%#@"; //size has to be power of two
     uint8_t* buf = img->buf;
     uint8_t b;
-    size_t i = 0;
+    int32_t i, lastChar;
     size_t constexpr bufsize = IMG_WIDTH;
     uint8_t linebuf[IMG_WIDTH];
-    for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
+    for (int32_t x = 0; x < IMG_WIDTH; x++) {
+        Serial.print("_");
+    }
+    for (int32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
+        for (lastChar = IMG_WIDTH-1; lastChar >= 0; lastChar--) {
+            if (img->format == PIXFORMAT_RGB888) {
+                b = std::max({buf[(y+lastChar)*3], buf[(y+lastChar)*3+1], buf[(y+lastChar)*3+2]});
+            }
+            else if (img->format == PIXFORMAT_GRAYSCALE) {
+                b = buf[y+lastChar];
+            }
+            if (b >= 16) {
+                break;
+            }
+        }
+        
         i = 0;
-        for (uint32_t x = 0; x < IMG_WIDTH; x++) {
+        for (int32_t x = 0; x <= lastChar; x++) {
             if (img->format == PIXFORMAT_RGB888) {
                 b = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
             }
             else if (img->format == PIXFORMAT_GRAYSCALE) {
                 b = buf[y+x];
             }
-            if (b == 0) linebuf[i] = ' ';
-            else if (b <= 16) linebuf[i] = '.';
-            else if (b <= 32) linebuf[i] = ',';
-            else if (b <= 48) linebuf[i] = '`';
-            else if (b <= 64) linebuf[i] = '\'';
-            else if (b <= 80) linebuf[i] = '"';
-            else if (b <= 96) linebuf[i] = '^';
-            else if (b <= 112) linebuf[i] = '*';
-            else if (b <= 128) linebuf[i] = ':';
-            else if (b <= 144) linebuf[i] = 'o';
-            else if (b <= 160) linebuf[i] = 'O';
-            else if (b <= 186) linebuf[i] = 'Q';
-            else if (b <= 192) linebuf[i] = '0';
-            else if (b <= 208) linebuf[i] = '&';
-            else if (b <= 224) linebuf[i] = '%';
-            else if (b <= 240) linebuf[i] = '#';
-            else linebuf[i] = '@';
-            if (i >= bufsize) logErrorAndRestart("Linebuf overflow in printImg()");
+            linebuf[i] = charLU[b >> 4];
+            if (i >= bufsize) {
+                ESP_LOGE(CAM, "lastChar: %d, i: %d", lastChar, i);
+                // Serial.write(linebuf, IMG_WIDTH);
+                // Serial.println();
+                logErrorAndRestart("Linebuf overflow in printImg()");
+            }
             i++;
         }
-        Serial.write(linebuf, IMG_WIDTH);
+        Serial.write(linebuf, lastChar+1);
         Serial.println();
     }
-    
+    for (int32_t x = 0; x < IMG_WIDTH; x++) {
+        Serial.print("_");
+    }
     Serial.print("\n\n");
 }
 
@@ -792,6 +799,7 @@ void scaleCameraBuffer(const camera_fb_t* inImg, camera_fb_t* outImg, bool adapt
     if (inImg->len != IMG_WIDTH*IMG_HEIGHT*sizeof(InT) || outImg->len != IMG_WIDTH*IMG_HEIGHT*sizeof(OutT) || inImg->len*sizeof(OutT) != outImg->len*sizeof(InT)) {
         logErrorAndRestart("Recieved incompatible type or buf size");
     }
+    resetImg(outImg);
     InT* p1 = reinterpret_cast<InT*>(inImg->buf), *p1_static = p1;
     OutT* p2 = reinterpret_cast<OutT*>(outImg->buf);
     if constexpr (sizeof(InT) <= sizeof(OutT)) {
