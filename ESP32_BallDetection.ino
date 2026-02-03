@@ -554,7 +554,22 @@ int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pOutImgs, int minR,
         if (b.empty()) return false; // a can never be less than empty b
         if (a.empty()) return true;
         return a[0].i<b[0].i;});
-    int bestR = maxPixel-pMaxPixels->begin()+minR;
+
+    int bestR;
+    if (!pMaxPixels->empty()) bestR = maxPixel-pMaxPixels->begin()+minR;
+    else {
+        camera_fb_t *pCurImg = pOutImgs;
+        uint16_t maxI = 0;
+        Pixel curPixel;
+        for (int r = MIN_RAD; r <= MAX_RAD; pCurImg++, r++) {
+            curPixel = findMaxPixel<uint16_t>(pCurImg);
+            if (curPixel.i > maxI) {
+                maxI = curPixel.i;
+                bestR = r;
+            }
+            (*pMaxPixels)[r-MIN_RAD].push_back(curPixel);
+        }
+    }
     return bestR;
 }
 
@@ -916,19 +931,20 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::vector<Pixel> *bal
         ESP_LOGI(CAM, "BestR: %d, Max Pixel: (%d, %d, %d)", bestR, maxPixel.x, maxPixel.y, maxPixel.i);
         for (int r = MIN_RAD; r <= MAX_RAD; r++) {
             if (maxPixels[r-MIN_RAD].empty()) continue;
-            Serial.printf("Radius %d:\n", r);
+            Serial.printf("Radius %d:", r);
             for (const Pixel& p : maxPixels[r-MIN_RAD]) {
-                Serial.printf("\t(%d, %d): %d\n", p.x, p.y, p.i);
+                Serial.printf("\t(%d, %d): %d", p.x, p.y, p.i);
             }
             Serial.print("\n");
         }
         Serial.print("\n");
 
         findBalls(&maxPixels, balls);
-        Serial.println("Balls found:");
+        Serial.printf("Balls found (%d):\n", balls->size());
         for (const auto& ball : *balls) {
             Serial.printf("\t(%d, %d): %d\n", ball.x, ball.y, ball.i);
         }
+        Serial.println("\n")
         {MyFuncTimer _t("scaleCameraBuffer");
         scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
 
@@ -944,6 +960,8 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::vector<Pixel> *bal
     }
     else {
         Serial.println("No circles detected");
+        {MyFuncTimer _t("scaleCameraBuffer");
+        scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
         applyMask(&rgb888Img, &gradImg, 120, 0);
         drawGuideCircles<uint8_t>(&circleImg, 200);
         applyMask(&rgb888Img, &circleImg, 120, 1);
