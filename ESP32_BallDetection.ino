@@ -710,104 +710,46 @@ void testImage(camera_fb_t* img, int pattern) {
     }
 }
 
-void printImg(camera_fb_t* img, bool optimized=false) {
+void printImg(camera_fb_t* img) {
     // Chars: . , ` ' " ^ * : o O Q 0 & % # @    // Extended List: . , ` ' " ^ * : - + = o s x z O Q 0 & % # @ M W $
     uint8_t* buf = img->buf;
-
-    if (!optimized) {
-        for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
-            for (uint32_t x = 0; x < IMG_WIDTH; x++) {
-                if (img->format == PIXFORMAT_RGB888) {
-                    uint8_t i = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
-                    if (i == 0) Serial.print(" ");
-                    else if (i <= 16) Serial.print(".");
-                    else if (i <= 32) Serial.print(",");
-                    else if (i <= 48) Serial.print("`");
-                    else if (i <= 64) Serial.print("'");
-                    else if (i <= 80) Serial.print("\"");
-                    else if (i <= 96) Serial.print("^");
-                    else if (i <= 112) Serial.print("*");
-                    else if (i <= 128) Serial.print(":");
-                    else if (i <= 144) Serial.print("o");
-                    else if (i <= 160) Serial.print("O");
-                    else if (i <= 186) Serial.print("Q");
-                    else if (i <= 192) Serial.print("0");
-                    else if (i <= 208) Serial.print("&");
-                    else if (i <= 224) Serial.print("%");
-                    else if (i <= 240) Serial.print("#");
-                    else Serial.print("@");
-                }
-                else if (img->format == PIXFORMAT_GRAYSCALE) {
-                    uint8_t i = buf[y+x];
-                    if (i == 0) Serial.print(" ");
-                    else if (i <= 16) Serial.print(".");
-                    else if (i <= 32) Serial.print(",");
-                    else if (i <= 48) Serial.print("`");
-                    else if (i <= 64) Serial.print("'");
-                    else if (i <= 80) Serial.print("\"");
-                    else if (i <= 96) Serial.print("^");
-                    else if (i <= 112) Serial.print("*");
-                    else if (i <= 128) Serial.print(":");
-                    else if (i <= 144) Serial.print("o");
-                    else if (i <= 160) Serial.print("O");
-                    else if (i <= 186) Serial.print("Q");
-                    else if (i <= 192) Serial.print("0");
-                    else if (i <= 208) Serial.print("&");
-                    else if (i <= 224) Serial.print("%");
-                    else if (i <= 240) Serial.print("#");
-                    else Serial.print("@");
-                }
+    uint8_t b;
+    size_t i = 0;
+    size_t constexpr bufsize = IMG_WIDTH;
+    uint8_t linebuf[IMG_WIDTH];
+    for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
+        i = 0;
+        for (uint32_t x = 0; x < IMG_WIDTH; x++) {
+            if (img->format == PIXFORMAT_RGB888) {
+                b = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
             }
-            Serial.println();
-        }
-    }
-    else {
-        for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
-            for (uint32_t x = 0; x < IMG_WIDTH; x++) {
-                if (img->format == PIXFORMAT_RGB888) {
-                    uint8_t i = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
-                    if (i == 0) Serial.print(" ");
-                    else if (i <= 16) Serial.print(".");
-                    else if (i <= 32) Serial.print(",");
-                    else if (i <= 48) Serial.print("`");
-                    else if (i <= 64) Serial.print("'");
-                    else if (i <= 80) Serial.print("\"");
-                    else if (i <= 96) Serial.print("^");
-                    else if (i <= 112) Serial.print("*");
-                    else if (i <= 128) Serial.print(":");
-                    else if (i <= 144) Serial.print("o");
-                    else if (i <= 160) Serial.print("O");
-                    else if (i <= 186) Serial.print("Q");
-                    else if (i <= 192) Serial.print("0");
-                    else if (i <= 208) Serial.print("&");
-                    else if (i <= 224) Serial.print("%");
-                    else if (i <= 240) Serial.print("#");
-                    else Serial.print("@");
-                }
-                else if (img->format == PIXFORMAT_GRAYSCALE) {
-                    uint8_t i = buf[y+x];
-                    if (i == 0) Serial.print(" ");
-                    else if (i <= 16) Serial.print(".");
-                    else if (i <= 32) Serial.print(",");
-                    else if (i <= 48) Serial.print("`");
-                    else if (i <= 64) Serial.print("'");
-                    else if (i <= 80) Serial.print("\"");
-                    else if (i <= 96) Serial.print("^");
-                    else if (i <= 112) Serial.print("*");
-                    else if (i <= 128) Serial.print(":");
-                    else if (i <= 144) Serial.print("o");
-                    else if (i <= 160) Serial.print("O");
-                    else if (i <= 186) Serial.print("Q");
-                    else if (i <= 192) Serial.print("0");
-                    else if (i <= 208) Serial.print("&");
-                    else if (i <= 224) Serial.print("%");
-                    else if (i <= 240) Serial.print("#");
-                    else Serial.print("@");
-                }
+            else if (img->format == PIXFORMAT_GRAYSCALE) {
+                b = buf[y+x];
             }
-            Serial.println();
+            if (b == 0) linebuf[i] = ' ';
+            else if (b <= 16) linebuf[i] = '.';
+            else if (b <= 32) linebuf[i] = ',';
+            else if (b <= 48) linebuf[i] = '`';
+            else if (b <= 64) linebuf[i] = '\'';
+            else if (b <= 80) linebuf[i] = '"';
+            else if (b <= 96) linebuf[i] = '^';
+            else if (b <= 112) linebuf[i] = '*';
+            else if (b <= 128) linebuf[i] = ':';
+            else if (b <= 144) linebuf[i] = 'o';
+            else if (b <= 160) linebuf[i] = 'O';
+            else if (b <= 186) linebuf[i] = 'Q';
+            else if (b <= 192) linebuf[i] = '0';
+            else if (b <= 208) linebuf[i] = '&';
+            else if (b <= 224) linebuf[i] = '%';
+            else if (b <= 240) linebuf[i] = '#';
+            else linebuf[i] = '@';
+            if (i >= bufsize) logErrorAndRestart("Linebuf overflow in printImg()");
+            i++;
         }
+        Serial.write(linebuf, IMG_WIDTH);
+        Serial.println();
     }
+    
     Serial.print("\n\n");
 }
 
