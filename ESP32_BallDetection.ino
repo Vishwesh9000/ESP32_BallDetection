@@ -133,19 +133,25 @@ struct Ball {
     Color color;
 };
 
-camera_fb_t rgb888Img = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}};
-camera_fb_t blueImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}};
-camera_fb_t grayImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
-camera_fb_t gradImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
-camera_fb_t extendedImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
+constexpr camera_fb_t rgbImgTemplate =  {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}},
+                grayscaleImgTemplate =  {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}},
+                uint16ImgTemplate =     {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
+
+
+
+camera_fb_t rgb888Img = rgbImgTemplate;
+camera_fb_t blueImg = rgbImgTemplate;
+camera_fb_t grayImg = grayscaleImgTemplate;
+camera_fb_t gradImg = grayscaleImgTemplate;
+camera_fb_t extendedImg = uint16ImgTemplate;
 camera_fb_t jpgImg = {.buf=nullptr, .len=0, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_JPEG, .timestamp={0,0}};
 
-camera_fb_t hsvImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}};
-camera_fb_t circleImg = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
+camera_fb_t hsvImg = rgbImgTemplate;
+camera_fb_t circleImg = grayscaleImgTemplate;
 
 camera_fb_t houghImgs[MAX_RAD-MIN_RAD+1];
-static constexpr camera_fb_t houghImgTemplate = {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
-camera_fb_t finalHoughImg = {.buf=nullptr, .len=houghImgTemplate.len/2, .width=houghImgTemplate.width, .height=houghImgTemplate.height,.format=houghImgTemplate.format, .timestamp={0,0}};
+camera_fb_t houghImgTemplate = uint16ImgTemplate;
+camera_fb_t finalHoughImg = grayscaleImgTemplate;
 camera_fb_t houghImgTotal = {.buf=nullptr, .len=(MAX_RAD-MIN_RAD+1)*houghImgTemplate.len, .width=houghImgTemplate.width, .height=houghImgTemplate.height,.format=houghImgTemplate.format, .timestamp={0,0}};
 
 
@@ -944,7 +950,7 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::vector<Pixel> *bal
         for (const auto& ball : *balls) {
             Serial.printf("\t(%d, %d): %d\n", ball.x, ball.y, ball.i);
         }
-        Serial.println("\n")
+        Serial.println("\n");
         {MyFuncTimer _t("scaleCameraBuffer");
         scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
 
