@@ -12,10 +12,7 @@
 #include <utility>
 #include <tuple>
 
-
-extern "C" {
-    #include "esp_log.h"
-}
+#include "esp_log.h"
 
 #define IMG_WIDTH 320
 #define IMG_HEIGHT 240
@@ -137,23 +134,17 @@ constexpr camera_fb_t rgbImgTemplate =  {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH
                 grayscaleImgTemplate =  {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}},
                 uint16ImgTemplate =     {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
 
-
-
 camera_fb_t rgb888Img = rgbImgTemplate;
 camera_fb_t blueImg = rgbImgTemplate;
 camera_fb_t grayImg = grayscaleImgTemplate;
 camera_fb_t gradImg = grayscaleImgTemplate;
-camera_fb_t extendedImg = uint16ImgTemplate;
+camera_fb_t uint16Img = uint16ImgTemplate;
 camera_fb_t jpgImg = {.buf=nullptr, .len=0, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_JPEG, .timestamp={0,0}};
 
 camera_fb_t hsvImg = rgbImgTemplate;
 camera_fb_t circleImg = grayscaleImgTemplate;
 
-camera_fb_t houghImgs[MAX_RAD-MIN_RAD+1];
-camera_fb_t houghImgTemplate = uint16ImgTemplate;
 camera_fb_t finalHoughImg = grayscaleImgTemplate;
-camera_fb_t houghImgTotal = {.buf=nullptr, .len=(MAX_RAD-MIN_RAD+1)*houghImgTemplate.len, .width=houghImgTemplate.width, .height=houghImgTemplate.height,.format=houghImgTemplate.format, .timestamp={0,0}};
-
 
 int16_t **circleCoordinates;
 
@@ -180,6 +171,29 @@ camera_fb_t* camera_capture(){
     }
     ESP_LOGI(CAM, "Captured frame");
     return fb;
+}
+
+void logErrorAndRestart(const char* s) {
+    ESP_LOGE(ERROR, "%s", s); 
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    ESP.restart();
+}
+
+void allocate_camera_fb(camera_fb_t* fb) {
+    fb->buf = (uint8_t*) ps_malloc(fb->len);
+        if (fb->buf == NULL) {
+            ESP_LOGE(CAM, "Failed to allocate buffer");
+            delay(10000);
+            ESP.restart();
+        }
+        memset(fb->buf, 0, fb->len);
+}
+
+void allocate_camera_fbs(std::initializer_list<camera_fb_t*> fbs) {
+    for (int i = 0; camera_fb_t *fb : fbs) {
+        allocate_camera_fb(fb);
+        i++;
+    }
 }
 
 void updateRGBBuffer(camera_fb_t *fb) {
@@ -224,12 +238,209 @@ void updateJPGBuffer(camera_fb_t *img) {
     }
 }
 
+void checkMem(const char* msg, bool level=0) {
+    auto& free_size = heap_caps_get_free_size;
+    auto& total_size = heap_caps_get_total_size;
+    if (level) {
+      ESP_LOGW(CAM, "\n[%s]:\n"
+                      "\tInternal: %d/%d bytes free - %d%%\n"
+                      "\tPSRAM: %d/%d bytes free - %d%%\n"
+                      /*"\t32_bit: %d/%d bytes free - %d%%\n"
+                      "\t8_bit: %d/%d bytes free - %d%%\n"*/,
+        msg,
+        free_size(MALLOC_CAP_INTERNAL), total_size(MALLOC_CAP_INTERNAL), free_size(MALLOC_CAP_INTERNAL)*100/total_size(MALLOC_CAP_INTERNAL),
+        free_size(MALLOC_CAP_SPIRAM), total_size(MALLOC_CAP_SPIRAM), free_size(MALLOC_CAP_SPIRAM)*100/total_size(MALLOC_CAP_SPIRAM)/*,
+        free_size(MALLOC_CAP_32BIT), total_size(MALLOC_CAP_32BIT), free_size(MALLOC_CAP_32BIT)*100/total_size(MALLOC_CAP_32BIT),
+        free_size(MALLOC_CAP_8BIT), total_size(MALLOC_CAP_8BIT), free_size(MALLOC_CAP_8BIT)*100/total_size(MALLOC_CAP_8BIT)*/);
+    }
+    else {
+        ESP_LOGV(CAM, "[%s]:\n"
+                      "\tInternal: %d/%d bytes free - %d%%\n"
+                      "\tPSRAM: %d/%d bytes free - %d%%\n"
+                      "\t32_bit: %d/%d bytes free - %d%%\n"
+                      "\t8_bit: %d/%d bytes free - %d%%\n",
+            msg,
+            free_size(MALLOC_CAP_INTERNAL), total_size(MALLOC_CAP_INTERNAL), free_size(MALLOC_CAP_INTERNAL)*100/total_size(MALLOC_CAP_INTERNAL),
+            free_size(MALLOC_CAP_SPIRAM), total_size(MALLOC_CAP_SPIRAM), free_size(MALLOC_CAP_SPIRAM)*100/total_size(MALLOC_CAP_SPIRAM),
+            free_size(MALLOC_CAP_32BIT), total_size(MALLOC_CAP_32BIT), free_size(MALLOC_CAP_32BIT)*100/total_size(MALLOC_CAP_32BIT),
+            free_size(MALLOC_CAP_8BIT), total_size(MALLOC_CAP_8BIT), free_size(MALLOC_CAP_8BIT)*100/total_size(MALLOC_CAP_8BIT));
+    }
+}
+
+void resetImg(camera_fb_t *img) {
+    memset(img->buf, 0, img->len);
+}
+
+void testImage(camera_fb_t* img, int pattern) {
+    uint8_t* buf = img->buf;
+    memset(buf, 0, img->len);
+    if (pattern == 0) return;
+    if (pattern == 1) {
+        if (img->format == PIXFORMAT_RGB888) {
+            for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
+                int d = 5;
+                for (int j = 0; j < d; j++) {
+                memset(buf+(y+(IMG_WIDTH/d*j))*3, 255, (IMG_WIDTH/2/d)*3);
+                }
+            }
+        }
+        else if (img->format == PIXFORMAT_GRAYSCALE) {
+            for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
+                int d = 5;
+                for (int j = 0; j < d; j++) {
+                memset(buf+(y+(IMG_WIDTH/d*j)), 255, (IMG_WIDTH/2/d));
+                }
+            }
+        }
+    }
+    else {
+        ESP_LOGE(CAM, "Pattern for %d not created yet", pattern);
+    }
+}
+
+void printImg(camera_fb_t* img) {
+    // Chars: . , ' " ^ * : o O Q 0 & % # @    // Extended List: . , ` ' " ^ * : - + = o s x z O Q 0 & % # @ M W $
+    const uint8_t charLU[] = " .,'\"^*:oOQ0&%#@"; //size has to be power of two
+    uint8_t* buf = img->buf;
+    uint8_t b;
+    int32_t i, lastChar;
+    size_t constexpr bufsize = IMG_WIDTH;
+    uint8_t linebuf[IMG_WIDTH];
+    for (int32_t x = 0; x < IMG_WIDTH; x++) {
+        Serial.print("_");
+    }
+    for (int32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
+        for (lastChar = IMG_WIDTH-1; lastChar >= 0; lastChar--) {
+            if (img->format == PIXFORMAT_RGB888) {
+                b = std::max({buf[(y+lastChar)*3], buf[(y+lastChar)*3+1], buf[(y+lastChar)*3+2]});
+            }
+            else if (img->format == PIXFORMAT_GRAYSCALE) {
+                b = buf[y+lastChar];
+            }
+            if (b >= 16) {
+                break;
+            }
+        }
+        
+        i = 0;
+        for (int32_t x = 0; x <= lastChar; x++) {
+            if (img->format == PIXFORMAT_RGB888) {
+                b = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
+            }
+            else if (img->format == PIXFORMAT_GRAYSCALE) {
+                b = buf[y+x];
+            }
+            linebuf[i] = charLU[b >> 4];
+            if (i >= bufsize) {
+                ESP_LOGE(CAM, "lastChar: %d, i: %d", lastChar, i);
+                // Serial.write(linebuf, IMG_WIDTH);
+                // Serial.println();
+                logErrorAndRestart("Linebuf overflow in printImg()");
+            }
+            i++;
+        }
+        Serial.write(linebuf, lastChar+1);
+        Serial.println();
+    }
+    for (int32_t x = 0; x < IMG_WIDTH; x++) {
+        Serial.print("_");
+    }
+    Serial.print("\n\n");
+}
+
+// IMPLEMENT ADAPTIVE SCALING
+template <typename InT, typename OutT> //Don't pass signed types
+void scaleCameraBuffer(const camera_fb_t* inImg, camera_fb_t* outImg, bool adaptive=false) {
+    if (inImg->len != IMG_WIDTH*IMG_HEIGHT*sizeof(InT) || outImg->len != IMG_WIDTH*IMG_HEIGHT*sizeof(OutT) || inImg->len*sizeof(OutT) != outImg->len*sizeof(InT)) {
+        logErrorAndRestart("Recieved incompatible type or buf size");
+    }
+    resetImg(outImg);
+    InT* p1 = reinterpret_cast<InT*>(inImg->buf), *p1_static = p1;
+    OutT* p2 = reinterpret_cast<OutT*>(outImg->buf);
+    if constexpr (sizeof(InT) <= sizeof(OutT)) {
+        for (; p1-p1_static < inImg->len/sizeof(InT); p1++, p2++) {
+            *p2 = static_cast<OutT>(*p1) << (8*(sizeof(OutT)-sizeof(InT)));
+        }
+    }
+    else {
+        for (; p1-p1_static < inImg->len/sizeof(InT); p1++, p2++) {
+            *p2 = static_cast<OutT>(*p1 >> (8*(sizeof(InT)-sizeof(OutT))));
+        }
+    }
+
+
+}
+
+template<typename T>
+Pixel findMaxPixel(camera_fb_t *img) {
+    if constexpr (std::is_same_v<T, uint8_t>) {
+        uint8_t *maxptr = std::max_element(img->buf, img->buf+img->len);
+        uint32_t length = maxptr - img->buf;
+        uint16_t x = length % img->width, y = length / img->width;
+        return {x,y,*maxptr};
+    }
+    else if constexpr (std::is_same_v<T, uint16_t>) {
+        uint16_t *start = reinterpret_cast<uint16_t*>(img->buf);
+        uint16_t *maxptr = std::max_element(start, start+(img->len/2));
+        uint32_t length = maxptr - start;
+        uint16_t x = length % img->width, y = length / img->width;
+        return {x,y,*maxptr};
+    }
+    else logErrorAndRestart("Type Not Supported for findMax Pixel");
+}
+
+template<typename T>
+void pixelsAboveThreshold(camera_fb_t *img, std::vector<Pixel> *pixels, const int t) {
+    if (img->format != PIXFORMAT_GRAYSCALE) logErrorAndRestart("Image format to pixelsAboveThreshold not supported");
+    T* ptr = reinterpret_cast<T*>(img->buf), *static_ptr = ptr;
+    for (; ptr-static_ptr < img->len/sizeof(T); ptr++) {
+        if (*ptr > t) {
+            int x, y;
+            x = (ptr-static_ptr) % IMG_WIDTH;
+            y = (ptr-static_ptr) / IMG_WIDTH;
+            pixels->emplace_back(x,y,*ptr);
+        }
+    }
+    std::sort(pixels->begin(), pixels->end(), [](const Pixel& a, const Pixel& b) {return a.i > b.i;});
+}
+
+void convertToGrayScale(camera_fb_t *pIn, camera_fb_t *pOut, bool weighted=false) {
+    if (pIn->len != 3*pIn->width*pIn->height || pOut->len != pOut->width*pOut->height || pOut->width != pIn->width || pOut->height != pIn->height) {
+        logErrorAndRestart("Invalid params passed to convertToGrayscale()");
+    }
+    for (uint8_t *r = pIn->buf, *g=pIn->buf+1, *b=pIn->buf+2, *out = pOut->buf; 
+            r-pIn->buf < pIn->len; r+=3, g+=3, b+=3, out++) {
+
+        *out = (*r+*b+*g)/3;
+    }
+}
+
+void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, int threshold, uint8_t channel = 3) {
+    if (pMaskImg->format != PIXFORMAT_GRAYSCALE) logErrorAndRestart("[applyMask()]: maskImg not grayscale");
+    if (pInImg->format != PIXFORMAT_RGB888) logErrorAndRestart("[applyMask()]: Format not supported for pInImg/pOutImg");
+    if (channel > 3) logErrorAndRestart("[applyMask()]: Channel Invalid");
+    uint8_t *pIn = pInImg->buf, *pMask = pMaskImg->buf;
+    for (; pMask-pMaskImg->buf < pMaskImg->len; pIn+=3, pMask++) {
+        if (*pMask > threshold) {
+            if (channel == 3) {
+                pIn[0] = *pMask;
+                pIn[1] = *pMask;
+                pIn[2] = *pMask;
+            }
+            else {
+                pIn[channel] = *pMask;
+            }
+        }
+    }
+} 
+
+
 void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2) {
+    resetImg(img2); resetImg(&uint16Img);
     uint8_t* rgb = img->buf;
     uint8_t* grad = img2->buf;
-    uint16_t* gradE = reinterpret_cast<uint16_t*>(extendedImg.buf);
+    uint16_t* gradE = reinterpret_cast<uint16_t*>(uint16Img.buf);
 
-    memset(grad, 0, img2->len);
   
     uint32_t x, x1, x2, y, y1, y2;
     uint32_t x0y0, x0y1, x0y2, x1y0, /*x1y1,*/ x1y2, x2y0, x2y1, x2y2;
@@ -318,6 +529,85 @@ void calcCircleCoordinates(int16_t* buf, uint8_t r) {
     // }
 }
 
+Color pixelColor(int r, int g, int b) {
+    // if (r > 120 && r-max(g, b) > 50) { 
+    //   return Color::Red;
+    // }
+    // if (max({r,g,b}) < 70 && abs(max({r,g,b})-min({r,g,b})) < 12) { 
+    //   return Color::Black;
+    // } 
+    // if (r == max({r,g,b}) && r - max(g,b) > 10) {
+    //   return Color::Brown;
+    // }
+    
+    // return Color::Other;
+    HSV hsv(r,g,b);
+    if (IN_RANGE(hsv.h, 240, 360)) return Color::Blue;
+    // if (hsv.v<60 && hsv.s < 80) return Color::Black;
+
+
+
+    // if (IN_RANGE(hsv.h, 50, 130) && hsv.s > 100 && IN_RANGE(hsv.v, 50, 140)) return Color::Red;
+    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 100 && IN_RANGE(hsv.v, 90, 140)) return Color::Red; //Good Lamp Light Home Phone Flashlight
+
+
+    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 90, 140)) return Color::Red;
+    //OG
+    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
+
+    // V1
+    if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
+
+    // V2
+    // Extremely high saturation
+    // if (hsv.s x> 160) return Color::Red; 
+    //Way to selective (balls not round) + tons of bg noise
+
+    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
+
+    
+    // if (hsv.h > 60 && hsv.h < 120 && hsv.s > 40 && hsv.v > 40 && hsv.v < 100) return Color::Brown;
+
+    return Color::Other;
+}
+
+void selectColors(camera_fb_t* img, camera_fb_t* colorImg, Color color, bool debug = false) {
+    memset(colorImg->buf, 0, colorImg->len);
+
+    for (int i = 0; i < colorImg->len; i+=3) {
+        Color c = pixelColor(img->buf[i], img->buf[i+1], img->buf[i+2]);
+
+        if (c == color) {
+            if (!debug) {
+                colorImg->buf[i] = 255;
+                colorImg->buf[i+1] = 255;
+                colorImg->buf[i+2] = 255;
+            }
+            else {
+                HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]);
+                colorImg->buf[i] = hsv.h/2;
+                colorImg->buf[i+1] = hsv.s;
+                colorImg->buf[i+2] = hsv.v;
+            }
+        }
+
+        else {
+            if (!debug) {
+                colorImg->buf[i] = 0;
+                colorImg->buf[i+1] = 0;
+                colorImg->buf[i+2] = 0;
+            }
+        else {
+            HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]); 
+            colorImg->buf[i] = hsv.h/4; // division for differentiation with focused parts
+            colorImg->buf[i+1] = hsv.s/2;
+            colorImg->buf[i+2] = hsv.v/2;
+        }
+
+        }
+    }
+}
+
 template <typename T> //uint8_t or uint16_t
 void addToPixelIntensity(T *x, uint16_t i) {
     if (std::is_same_v<T, uint8_t>) {
@@ -372,7 +662,6 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
   
     if (cy-r >= 0 && cy+r < height && cx-r >= 0 && cx+r < fb->width) {
         // No chance of out of bounds
-        // ESP_LOGV(CAM, "Drawing non-colliding circle");
 
         addToPixelIntensity<T>(&gray[(width) * (cy+r) + cx]   ,intensity);
         addToPixelIntensity<T>(&gray[(width) * (cy-r) + cx]   ,intensity);
@@ -390,7 +679,7 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
                 break;
             }
 
-            ESP_LOGV(CAM, "Drawing Coordinate (%d, %d)", i, buf[i]);
+            
             addToPixelIntensity<T>(&gray[(width) * (cy+buf[i]) + cx+i]    , intensity);
             addToPixelIntensity<T>(&gray[(width) * (cy+i)    + cx+buf[i]] , intensity);
             addToPixelIntensity<T>(&gray[(width) * (cy-i)    + cx+buf[i]] , intensity);
@@ -405,7 +694,6 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
     }
     else {
         // Chance of collision
-        // ESP_LOGV(CAM, "Drawing colliding circle");
 
         // if (cy - r < 0) {
         //   ESP_LOGD(CAM, "cy is too high {%d,%d}", cy, r);
@@ -534,11 +822,11 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
     }
 
     // Normalizing to uint8_t
-    // uint16_t *in = reinterpret_cast<uint16_t*>(extendedImg.buf), *inStart = in; uint8_t *out = pOutImg->buf;
-    // int maxVal = *std::max_element(in, in+(extendedImg.len/2));
+    // uint16_t *in = reinterpret_cast<uint16_t*>(uint16Img.buf), *inStart = in; uint8_t *out = pOutImg->buf;
+    // int maxVal = *std::max_element(in, in+(uint16Img.len/2));
     // int d = std::max(maxVal/255 + ((maxVal/255)*maxVal < 256 ? 0 : 1), 1);
     
-    // for (; in - inStart < extendedImg.len/2 && out - pOutImg->buf < pOutImg->len; in++, out++) {
+    // for (; in - inStart < uint16Img.len/2 && out - pOutImg->buf < pOutImg->len; in++, out++) {
     //   if (*in / d >= 256) {
     //     ESP_LOGE(CAM, "Value exceeds uint8_t max");
     //     vTaskDelay(pdMS_TO_TICKS(10000));
@@ -548,299 +836,25 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
     // }
 }
 
-//TODO: Implement ptrs instead of returns
 //minR and maxR are inclusive; pOutmgs should be a pointer to maxR-minR+1 camera_fb_t's
-int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pOutImgs, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels) {
+int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pFinalImg, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels) {
+    int bestR = 0;
+    Pixel maxPixel = {0,0,0}, curPixel;
     for (int r = minR, i = 0; r <= maxR; r++, i++) {
-        houghTransform(pInImg, pOutImgs+i, r);
+        houghTransform(pInImg, &uint16Img, r);
         (*pMaxPixels)[i].reserve(10);
-        pixelsAboveThreshold<uint16_t>(pOutImgs+i, &((*pMaxPixels)[i]), 12288); // 8192, 12288, 16384, 20480
-    }
-    auto maxPixel = std::max_element(pMaxPixels->begin(), pMaxPixels->end(), [](const std::vector<Pixel>& a, const std::vector<Pixel>& b) {
-        if (b.empty()) return false; // a can never be less than empty b
-        if (a.empty()) return true;
-        return a[0].i<b[0].i;});
-
-    int bestR;
-    if (!pMaxPixels->empty()) bestR = maxPixel-pMaxPixels->begin()+minR;
-    else {
-        camera_fb_t *pCurImg = pOutImgs;
-        uint16_t maxI = 0;
-        Pixel curPixel;
-        for (int r = MIN_RAD; r <= MAX_RAD; pCurImg++, r++) {
-            curPixel = findMaxPixel<uint16_t>(pCurImg);
-            if (curPixel.i > maxI) {
-                maxI = curPixel.i;
-                bestR = r;
-            }
-            (*pMaxPixels)[r-MIN_RAD].push_back(curPixel);
-        }
-    }
-    return bestR;
-}
-
-void checkMem(const char* msg, bool level=0) {
-    auto& free_size = heap_caps_get_free_size;
-    auto& total_size = heap_caps_get_total_size;
-    if (level) {
-      ESP_LOGW(CAM, "\n[%s]:\n"
-                      "\tInternal: %d/%d bytes free - %d%%\n"
-                      "\tPSRAM: %d/%d bytes free - %d%%\n"
-                      /*"\t32_bit: %d/%d bytes free - %d%%\n"
-                      "\t8_bit: %d/%d bytes free - %d%%\n"*/,
-        msg,
-        free_size(MALLOC_CAP_INTERNAL), total_size(MALLOC_CAP_INTERNAL), free_size(MALLOC_CAP_INTERNAL)*100/total_size(MALLOC_CAP_INTERNAL),
-        free_size(MALLOC_CAP_SPIRAM), total_size(MALLOC_CAP_SPIRAM), free_size(MALLOC_CAP_SPIRAM)*100/total_size(MALLOC_CAP_SPIRAM)/*,
-        free_size(MALLOC_CAP_32BIT), total_size(MALLOC_CAP_32BIT), free_size(MALLOC_CAP_32BIT)*100/total_size(MALLOC_CAP_32BIT),
-        free_size(MALLOC_CAP_8BIT), total_size(MALLOC_CAP_8BIT), free_size(MALLOC_CAP_8BIT)*100/total_size(MALLOC_CAP_8BIT)*/);
-    }
-    else {
-        ESP_LOGV(CAM, "[%s]:\n"
-                      "\tInternal: %d/%d bytes free - %d%%\n"
-                      "\tPSRAM: %d/%d bytes free - %d%%\n"
-                      "\t32_bit: %d/%d bytes free - %d%%\n"
-                      "\t8_bit: %d/%d bytes free - %d%%\n",
-            msg,
-            free_size(MALLOC_CAP_INTERNAL), total_size(MALLOC_CAP_INTERNAL), free_size(MALLOC_CAP_INTERNAL)*100/total_size(MALLOC_CAP_INTERNAL),
-            free_size(MALLOC_CAP_SPIRAM), total_size(MALLOC_CAP_SPIRAM), free_size(MALLOC_CAP_SPIRAM)*100/total_size(MALLOC_CAP_SPIRAM),
-            free_size(MALLOC_CAP_32BIT), total_size(MALLOC_CAP_32BIT), free_size(MALLOC_CAP_32BIT)*100/total_size(MALLOC_CAP_32BIT),
-            free_size(MALLOC_CAP_8BIT), total_size(MALLOC_CAP_8BIT), free_size(MALLOC_CAP_8BIT)*100/total_size(MALLOC_CAP_8BIT));
-    }
-}
-
-void allocate_camera_fb(camera_fb_t* fb) {
-    fb->buf = (uint8_t*) ps_malloc(fb->len);
-        if (fb->buf == NULL) {
-            ESP_LOGE(CAM, "Failed to allocate buffer");
-            delay(10000);
-            ESP.restart();
-        }
-        memset(fb->buf, 0, fb->len);
-}
-
-void allocate_camera_fbs(std::initializer_list<camera_fb_t*> fbs) {
-    for (int i = 0; camera_fb_t *fb : fbs) {
-        allocate_camera_fb(fb);
-        i++;
-    }
-}
-
-Color pixelColor(int r, int g, int b) {
-    // if (r > 120 && r-max(g, b) > 50) { 
-    //   return Color::Red;
-    // }
-    // if (max({r,g,b}) < 70 && abs(max({r,g,b})-min({r,g,b})) < 12) { 
-    //   return Color::Black;
-    // } 
-    // if (r == max({r,g,b}) && r - max(g,b) > 10) {
-    //   return Color::Brown;
-    // }
-    
-    // return Color::Other;
-    HSV hsv(r,g,b);
-    if (IN_RANGE(hsv.h, 240, 360)) return Color::Blue;
-    // if (hsv.v<60 && hsv.s < 80) return Color::Black;
-
-
-
-    // if (IN_RANGE(hsv.h, 50, 130) && hsv.s > 100 && IN_RANGE(hsv.v, 50, 140)) return Color::Red;
-    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 100 && IN_RANGE(hsv.v, 90, 140)) return Color::Red; //Good Lamp Light Home Phone Flashlight
-
-
-    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 90, 140)) return Color::Red;
-    //OG
-    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
-
-    // V1
-    if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
-
-    // V2
-    // Extremely high saturation
-    // if (hsv.s x> 160) return Color::Red; 
-    //Way to selective (balls not round) + tons of bg noise
-
-    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
-
-    
-    // if (hsv.h > 60 && hsv.h < 120 && hsv.s > 40 && hsv.v > 40 && hsv.v < 100) return Color::Brown;
-
-    return Color::Other;
-}
-
-void selectColors(camera_fb_t* img, camera_fb_t* colorImg, Color color, bool debug = false) {
-    memset(colorImg->buf, 0, colorImg->len);
-
-    for (int i = 0; i < colorImg->len; i+=3) {
-        Color c = pixelColor(img->buf[i], img->buf[i+1], img->buf[i+2]);
-
-        if (c == color) {
-            if (!debug) {
-                colorImg->buf[i] = 255;
-                colorImg->buf[i+1] = 255;
-                colorImg->buf[i+2] = 255;
-            }
-            else {
-                HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]);
-                colorImg->buf[i] = hsv.h/2;
-                colorImg->buf[i+1] = hsv.s;
-                colorImg->buf[i+2] = hsv.v;
-            }
-        }
-
-        else {
-            if (!debug) {
-                colorImg->buf[i] = 0;
-                colorImg->buf[i+1] = 0;
-                colorImg->buf[i+2] = 0;
-            }
-        else {
-            HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]); 
-            colorImg->buf[i] = hsv.h/4; // division for differentiation with focused parts
-            colorImg->buf[i+1] = hsv.s/2;
-            colorImg->buf[i+2] = hsv.v/2;
-        }
-
-        }
-    }
-}
-
-void testImage(camera_fb_t* img, int pattern) {
-    uint8_t* buf = img->buf;
-    memset(buf, 0, img->len);
-    if (pattern == 0) return;
-    if (pattern == 1) {
-        if (img->format == PIXFORMAT_RGB888) {
-            for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
-                int d = 5;
-                for (int j = 0; j < d; j++) {
-                memset(buf+(y+(IMG_WIDTH/d*j))*3, 255, (IMG_WIDTH/2/d)*3);
-                }
-            }
-        }
-        else if (img->format == PIXFORMAT_GRAYSCALE) {
-            for (uint32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
-                int d = 5;
-                for (int j = 0; j < d; j++) {
-                memset(buf+(y+(IMG_WIDTH/d*j)), 255, (IMG_WIDTH/2/d));
-                }
-            }
-        }
-    }
-    else {
-        ESP_LOGE(CAM, "Pattern for %d not created yet", pattern);
-    }
-}
-
-void printImg(camera_fb_t* img) {
-    // Chars: . , ' " ^ * : o O Q 0 & % # @    // Extended List: . , ` ' " ^ * : - + = o s x z O Q 0 & % # @ M W $
-    const uint8_t charLU[] = " .,'\"^*:oOQ0&%#@"; //size has to be power of two
-    uint8_t* buf = img->buf;
-    uint8_t b;
-    int32_t i, lastChar;
-    size_t constexpr bufsize = IMG_WIDTH;
-    uint8_t linebuf[IMG_WIDTH];
-    for (int32_t x = 0; x < IMG_WIDTH; x++) {
-        Serial.print("_");
-    }
-    for (int32_t y = 0; y < IMG_HEIGHT*IMG_WIDTH; y+= IMG_WIDTH) {
-        for (lastChar = IMG_WIDTH-1; lastChar >= 0; lastChar--) {
-            if (img->format == PIXFORMAT_RGB888) {
-                b = std::max({buf[(y+lastChar)*3], buf[(y+lastChar)*3+1], buf[(y+lastChar)*3+2]});
-            }
-            else if (img->format == PIXFORMAT_GRAYSCALE) {
-                b = buf[y+lastChar];
-            }
-            if (b >= 16) {
-                break;
-            }
-        }
+        pixelsAboveThreshold<uint16_t>(&uint16Img, &((*pMaxPixels)[i]), 12288); // 8192, 12288, 16384, 20480
         
-        i = 0;
-        for (int32_t x = 0; x <= lastChar; x++) {
-            if (img->format == PIXFORMAT_RGB888) {
-                b = std::max({buf[(y+x)*3], buf[(y+x)*3+1], buf[(y+x)*3+2]});
-            }
-            else if (img->format == PIXFORMAT_GRAYSCALE) {
-                b = buf[y+x];
-            }
-            linebuf[i] = charLU[b >> 4];
-            if (i >= bufsize) {
-                ESP_LOGE(CAM, "lastChar: %d, i: %d", lastChar, i);
-                // Serial.write(linebuf, IMG_WIDTH);
-                // Serial.println();
-                logErrorAndRestart("Linebuf overflow in printImg()");
-            }
-            i++;
-        }
-        Serial.write(linebuf, lastChar+1);
-        Serial.println();
-    }
-    for (int32_t x = 0; x < IMG_WIDTH; x++) {
-        Serial.print("_");
-    }
-    Serial.print("\n\n");
-}
-
-template<typename T>
-Pixel findMaxPixel(camera_fb_t *img) {
-    if constexpr (std::is_same_v<T, uint8_t>) {
-        uint8_t *maxptr = std::max_element(img->buf, img->buf+img->len);
-        uint32_t length = maxptr - img->buf;
-        uint16_t x = length % img->width, y = length / img->width;
-        return {x,y,*maxptr};
-    }
-    else if constexpr (std::is_same_v<T, uint16_t>) {
-        uint16_t *start = reinterpret_cast<uint16_t*>(img->buf);
-        uint16_t *maxptr = std::max_element(start, start+(img->len/2));
-        uint32_t length = maxptr - start;
-        uint16_t x = length % img->width, y = length / img->width;
-        return {x,y,*maxptr};
-    }
-    else logErrorAndRestart("Type Not Supported for findMax Pixel");
-}
-
-template<typename T>
-void pixelsAboveThreshold(camera_fb_t *img, std::vector<Pixel> *pixels, const int t) {
-    if (img->format != PIXFORMAT_GRAYSCALE) logErrorAndRestart("Image format to pixelsAboveThreshold not supported");
-    T* ptr = reinterpret_cast<T*>(img->buf), *static_ptr = ptr;
-    for (; ptr-static_ptr < img->len/sizeof(T); ptr++) {
-        if (*ptr > t) {
-            int x, y;
-            x = (ptr-static_ptr) % IMG_WIDTH;
-            y = (ptr-static_ptr) / IMG_WIDTH;
-            pixels->emplace_back(x,y,*ptr);
-        }
-    }
-    std::sort(pixels->begin(), pixels->end(), [](const Pixel& a, const Pixel& b) {return a.i > b.i;});
-}
-
-// IMPLEMENT ADAPTIVE SCALING
-template <typename InT, typename OutT> //Don't pass signed types
-void scaleCameraBuffer(const camera_fb_t* inImg, camera_fb_t* outImg, bool adaptive=false) {
-    if (inImg->len != IMG_WIDTH*IMG_HEIGHT*sizeof(InT) || outImg->len != IMG_WIDTH*IMG_HEIGHT*sizeof(OutT) || inImg->len*sizeof(OutT) != outImg->len*sizeof(InT)) {
-        logErrorAndRestart("Recieved incompatible type or buf size");
-    }
-    resetImg(outImg);
-    InT* p1 = reinterpret_cast<InT*>(inImg->buf), *p1_static = p1;
-    OutT* p2 = reinterpret_cast<OutT*>(outImg->buf);
-    if constexpr (sizeof(InT) <= sizeof(OutT)) {
-        for (; p1-p1_static < inImg->len/sizeof(InT); p1++, p2++) {
-            *p2 = static_cast<OutT>(*p1) << (8*(sizeof(OutT)-sizeof(InT)));
-        }
-    }
-    else {
-        for (; p1-p1_static < inImg->len/sizeof(InT); p1++, p2++) {
-            *p2 = static_cast<OutT>(*p1 >> (8*(sizeof(InT)-sizeof(OutT))));
+        if (!((*pMaxPixels)[i].empty())) curPixel = (*pMaxPixels)[i][0];
+        else curPixel = findMaxPixel<uint16_t>(&uint16Img);
+        if (curPixel.i > maxPixel.i) {
+            maxPixel = curPixel;
+            bestR = r;
+            scaleCameraBuffer<uint16_t, uint8_t>(&uint16Img, pFinalImg);
         }
     }
 
-
-}
-
-void logErrorAndRestart(const char* s) {
-    ESP_LOGE(ERROR, "%s", s); 
-    vTaskDelay(pdMS_TO_TICKS(10000));
-    ESP.restart();
+    return bestR;
 }
 
 template<typename T>
@@ -848,36 +862,6 @@ void drawGuideCircles(camera_fb_t *fb, uint32_t intensity) {
     drawCircle<T>(fb, MAX_RAD, MAX_RAD, MIN_RAD, intensity);
     drawCircle<T>(fb, MAX_RAD, MAX_RAD, MAX_RAD, intensity);
 }
-
-void convertToGrayScale(camera_fb_t *pIn, camera_fb_t *pOut, bool weighted=false) {
-    if (pIn->len != 3*pIn->width*pIn->height || pOut->len != pOut->width*pOut->height || pOut->width != pIn->width || pOut->height != pIn->height) {
-        logErrorAndRestart("Invalid params passed to convertToGrayscale()");
-    }
-    for (uint8_t *r = pIn->buf, *g=pIn->buf+1, *b=pIn->buf+2, *out = pOut->buf; 
-            r-pIn->buf < pIn->len; r+=3, g+=3, b+=3, out++) {
-
-        *out = (*r+*b+*g)/3;
-    }
-}
-
-void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, int threshold, uint8_t channel = 3) {
-    if (pMaskImg->format != PIXFORMAT_GRAYSCALE) logErrorAndRestart("[applyMask()]: maskImg not grayscale");
-    if (pInImg->format != PIXFORMAT_RGB888) logErrorAndRestart("[applyMask()]: Format not supported for pInImg/pOutImg");
-    if (channel > 3) logErrorAndRestart("[applyMask()]: Channel Invalid");
-    uint8_t *pIn = pInImg->buf, *pMask = pMaskImg->buf;
-    for (; pMask-pMaskImg->buf < pMaskImg->len; pIn+=3, pMask++) {
-        if (*pMask > threshold) {
-            if (channel == 3) {
-                pIn[0] = *pMask;
-                pIn[1] = *pMask;
-                pIn[2] = *pMask;
-            }
-            else {
-                pIn[channel] = *pMask;
-            }
-        }
-    }
-} 
 
 void findBalls(std::vector<std::vector<Pixel>> *pixels, std::vector<Pixel> *final_balls) {
     size_t num_pixels = 0;
@@ -911,11 +895,9 @@ void findBalls(std::vector<std::vector<Pixel>> *pixels, std::vector<Pixel> *fina
     }
 }
 
-void resetImg(camera_fb_t *img) {
-    memset(img->buf, 0, img->len);
-}
-
 void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::vector<Pixel> *balls) {
+    static std::vector<std::vector<Pixel>> maxPixels(MAX_RAD-MIN_RAD+1); int bestR;
+    for (auto& vec : maxPixels) vec.clear();
     balls->clear();
     
     {MyFuncTimer _t("updateRGBBuffer()");
@@ -927,14 +909,11 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::vector<Pixel> *bal
     {MyFuncTimer _t("calculateGradBuffer()");
     calculateGradBuffer(&blueImg, &gradImg);}
 
-    static std::vector<std::vector<Pixel>> maxPixels; int bestR;
-    maxPixels.clear(); 
-    maxPixels.resize(MAX_RAD-MIN_RAD+1);
+    
     {MyFuncTimer _t("multipleHoughTransform()");
-    bestR = multipleHoughTransform(&gradImg, &(houghImgs[0]), MIN_RAD, MAX_RAD, &maxPixels);}
+    bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels);}
     if (!maxPixels[bestR-MIN_RAD].empty()) {
-        Pixel maxPixel = maxPixels[bestR-MIN_RAD][0];
-        ESP_LOGI(CAM, "BestR: %d, Max Pixel: (%d, %d, %d)", bestR, maxPixel.x, maxPixel.y, maxPixel.i);
+        Serial.printf("BestR: %d\n", bestR);
         for (int r = MIN_RAD; r <= MAX_RAD; r++) {
             if (maxPixels[r-MIN_RAD].empty()) continue;
             Serial.printf("Radius %d:", r);
@@ -951,8 +930,6 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::vector<Pixel> *bal
             Serial.printf("\t(%d, %d): %d\n", ball.x, ball.y, ball.i);
         }
         Serial.println("\n");
-        {MyFuncTimer _t("scaleCameraBuffer");
-        scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
 
         // convertToGrayScale(&rgb888Img, &grayImg);
         applyMask(&rgb888Img, &gradImg, 120, 0);
@@ -966,8 +943,7 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::vector<Pixel> *bal
     }
     else {
         Serial.println("No circles detected");
-        {MyFuncTimer _t("scaleCameraBuffer");
-        scaleCameraBuffer<uint16_t, uint8_t>(houghImgs+(bestR-MIN_RAD), &finalHoughImg);}
+
         applyMask(&rgb888Img, &gradImg, 120, 0);
         drawGuideCircles<uint8_t>(&circleImg, 200);
         applyMask(&rgb888Img, &circleImg, 120, 1);
@@ -996,9 +972,7 @@ void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg) {
 void setup() {
     vTaskDelay(pdMS_TO_TICKS(1000));
     Serial.begin(115200);
-
     // Serial.setDebugOutput(true);
-    esp_log_level_set("*", ESP_LOG_VERBOSE);
 
     ESP_LOGI(CAM, "Began");
     checkMem("Began", 1);
@@ -1007,14 +981,8 @@ void setup() {
     else                {ESP_LOGW(CAM, "PSRAM not available"); delay(10000); ESP.restart();}
 
     ESP_LOGD(CAM, "Allocating Img Buffers");
-    allocate_camera_fbs({&rgb888Img, &blueImg, &gradImg, &extendedImg, &houghImgTotal, &finalHoughImg, &grayImg, &hsvImg, &circleImg});
+    allocate_camera_fbs({&rgb888Img, &blueImg, &grayImg, &gradImg, &uint16Img, &hsvImg, &circleImg, &finalHoughImg});
     
-    ESP_LOGD(CAM, "Allocating HoughImgs");
-    for (int i = 0; camera_fb_t& fb : houghImgs) {
-        fb = houghImgTemplate;
-        fb.buf = houghImgTotal.buf + (i*houghImgTemplate.len);
-        i++;
-    }
     ESP_LOGD(CAM, "Allocating circle buffers");
     circleCoordinates = (int16_t**) ps_malloc((MAX_RAD-MIN_RAD+1)*sizeof(int16_t*));
     if (circleCoordinates == NULL) {
