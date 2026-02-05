@@ -9,8 +9,10 @@
 #include <initializer_list>
 #include <type_traits>
 #include <vector>
+#include <unordered_map>
 #include <utility>
 #include <tuple>
+#include <string>
 
 #include "esp_log.h"
 
@@ -62,7 +64,7 @@ static camera_config_t camera_config = {
 };
 
 
-enum class Color {Red, Blue, Black, Brown, Other};
+enum class Color {Red, Blue, Black, Brown, Other}; const std::unordered_map<Color, std::string> colorToStr = {{Color::Red, "Red"}, {Color::Blue, "Blue"}, {Color::Black, "Black"}, {Color::Brown, "Brown"}, {Color::Other, "Other"}};
 enum class Mode {ShowCameraFeed, ShowColors, ShowGradient, ShowHoughTransform, ShowCircles};
 
 struct HSV {
@@ -122,7 +124,7 @@ struct Coordinate {
 };
 
 struct Pixel {
-    uint16_t x,y,i;
+    uint16_t x=0,y=0,i=0;
 };
 
 struct Ball {
@@ -135,7 +137,7 @@ constexpr camera_fb_t rgbImgTemplate =  {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH
                 uint16ImgTemplate =     {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
 
 camera_fb_t rgb888Img = rgbImgTemplate;
-camera_fb_t blueImg = rgbImgTemplate;
+camera_fb_t colorImg = rgbImgTemplate;
 camera_fb_t grayImg = grayscaleImgTemplate;
 camera_fb_t gradImg = grayscaleImgTemplate;
 camera_fb_t uint16Img = uint16ImgTemplate;
@@ -571,8 +573,8 @@ Color pixelColor(int r, int g, int b) {
     return Color::Other;
 }
 
-void selectColors(camera_fb_t* img, camera_fb_t* colorImg, Color color, bool debug = false) {
-    memset(colorImg->buf, 0, colorImg->len);
+void selectColor(camera_fb_t* img, camera_fb_t* colorImg, Color color, bool debug = false) {
+    resetImg(colorImg);
 
     for (int i = 0; i < colorImg->len; i+=3) {
         Color c = pixelColor(img->buf[i], img->buf[i+1], img->buf[i+2]);
@@ -836,7 +838,7 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
     // }
 }
 
-//minR and maxR are inclusive; pOutmgs should be a pointer to maxR-minR+1 camera_fb_t's
+//minR and maxR are inclusive; pOutmgs should be a pointer to a uint8 camera frame camera_fb_t's
 int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pFinalImg, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels) {
     int bestR = 0;
     Pixel maxPixel = {0,0,0}, curPixel;
@@ -863,7 +865,7 @@ void drawGuideCircles(camera_fb_t *fb, uint32_t intensity) {
     drawCircle<T>(fb, MAX_RAD, MAX_RAD, MAX_RAD, intensity);
 }
 
-void findBalls(std::vector<std::vector<Pixel>> *pixels, std::vector<Pixel> *final_balls) {
+void ballsFromPixels(std::vector<std::vector<Pixel>> *pixels, std::vector<Pixel> *final_balls) {
     size_t num_pixels = 0;
     for (const auto& inner : *pixels) {
         num_pixels += inner.size();
@@ -895,74 +897,72 @@ void findBalls(std::vector<std::vector<Pixel>> *pixels, std::vector<Pixel> *fina
     }
 }
 
-void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::vector<Pixel> *balls) {
+void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Color, std::vector<Pixel>> *pFinal_balls) {
     static std::vector<std::vector<Pixel>> maxPixels(MAX_RAD-MIN_RAD+1); int bestR;
-    for (auto& vec : maxPixels) vec.clear();
-    balls->clear();
-    
+    resetImg(&circleImg);
+
     {MyFuncTimer _t("updateRGBBuffer()");
     updateRGBBuffer(pFb);}
-
-    {MyFuncTimer _t("selectColors()");
-    selectColors(&rgb888Img, &blueImg, Color::Blue);}
-
-    {MyFuncTimer _t("calculateGradBuffer()");
-    calculateGradBuffer(&blueImg, &gradImg);}
-
     
-    {MyFuncTimer _t("multipleHoughTransform()");
-    bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels);}
-    if (!maxPixels[bestR-MIN_RAD].empty()) {
-        Serial.printf("BestR: %d\n", bestR);
-        for (int r = MIN_RAD; r <= MAX_RAD; r++) {
-            if (maxPixels[r-MIN_RAD].empty()) continue;
-            Serial.printf("Radius %d:", r);
-            for (const Pixel& p : maxPixels[r-MIN_RAD]) {
-                Serial.printf("\t(%d, %d): %d", p.x, p.y, p.i);
+    Serial.println("Pixels:");
+    for (auto& [color, balls] : *pFinal_balls) {
+        balls.clear();
+        for (auto& pixels : maxPixels) pixels.clear();
+        {MyFuncTimer _t("selectColor()");
+        selectColor(&rgb888Img, &colorImg, color);}
+
+        {MyFuncTimer _t("calculateGradBuffer()");
+        calculateGradBuffer(&colorImg, &gradImg);}
+
+        {MyFuncTimer _t("multipleHoughTransform()");
+        bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels);}
+        
+        Serial.printf("\t[%s]\n", colorToStr.at(color).c_str());
+        if (!maxPixels[bestR-MIN_RAD].empty()) {
+            Serial.printf("\t\tBestR: %d\n", bestR);
+            for (int r = MIN_RAD; r <= MAX_RAD; r++) {
+                if (maxPixels[r-MIN_RAD].empty()) continue;
+                Serial.printf("\t\tRadius %d:", r);
+                for (const Pixel& p : maxPixels[r-MIN_RAD]) {
+                    Serial.printf("\t(%d, %d): %d", p.x, p.y, p.i);
+                }
+                Serial.print("\n");
             }
             Serial.print("\n");
-        }
-        Serial.print("\n");
 
-        findBalls(&maxPixels, balls);
-        Serial.printf("Balls found (%d):\n", balls->size());
-        for (const auto& ball : *balls) {
-            Serial.printf("\t(%d, %d): %d\n", ball.x, ball.y, ball.i);
+            ballsFromPixels(&maxPixels, &balls);
+            for (auto& ball : balls) drawCircle<uint8_t>(&circleImg, ball.x, ball.y, MAX_RAD, 250);
         }
-        Serial.println("\n");
-
-        // convertToGrayScale(&rgb888Img, &grayImg);
+        else {
+            Serial.println("\tNo circles detected");
+        }
         applyMask(&rgb888Img, &gradImg, 120, 0);
-        
-        for (const auto& ball : *balls) {
-            drawCircle<uint8_t>(&circleImg, ball.x, ball.y, bestR, 200);
+    }
+    Serial.println("Balls:");
+    for (const auto& [color, balls] : *pFinal_balls) {
+        Serial.printf("\t[%s] (%d) balls found\n", colorToStr.at(color).c_str(), balls.size());
+        for (const auto& ball : balls) {
+            Serial.printf("\t\t(%d,%d): %d\n", ball.x, ball.y, ball.i);
         }
-        drawGuideCircles<uint8_t>(&circleImg, 200);
-        applyMask(&rgb888Img, &circleImg, 120, 1);
-        *pOutImg = &rgb888Img;
     }
-    else {
-        Serial.println("No circles detected");
-
-        applyMask(&rgb888Img, &gradImg, 120, 0);
-        drawGuideCircles<uint8_t>(&circleImg, 200);
-        applyMask(&rgb888Img, &circleImg, 120, 1);
-        *pOutImg = &rgb888Img;
-    }
+    
+    drawGuideCircles<uint8_t>(&circleImg, 200);
+    applyMask(&rgb888Img, &circleImg, 120, 1);
+    *pOutImg = &rgb888Img;
 }
 
-void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg) {
+void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg, Color color) {
     {MyFuncTimer _t("updateRGBBuffer()");
     updateRGBBuffer(pFb);}
 
-    {MyFuncTimer _t("selectColors()");
-    selectColors(&rgb888Img, &blueImg, Color::Blue);}
+    {MyFuncTimer _t("selectColor()");
+    selectColor(&rgb888Img, &colorImg, color);}
 
-    {MyFuncTimer _t("DEBUG selectColors()");
-    selectColors(&rgb888Img, &hsvImg, Color::Blue, true);}
+    {MyFuncTimer _t("DEBUG selectColor()");
+    selectColor(&rgb888Img, &hsvImg, color, true);}
 
     {MyFuncTimer _t("calculateGradBuffer()");
-    calculateGradBuffer(&blueImg, &gradImg);}
+    calculateGradBuffer(&colorImg, &gradImg);}
 
     {MyFuncTimer _t("applyMask() HSV");
     applyMask(&hsvImg, &gradImg, 120, 3);}
@@ -981,7 +981,7 @@ void setup() {
     else                {ESP_LOGW(CAM, "PSRAM not available"); delay(10000); ESP.restart();}
 
     ESP_LOGD(CAM, "Allocating Img Buffers");
-    allocate_camera_fbs({&rgb888Img, &blueImg, &grayImg, &gradImg, &uint16Img, &hsvImg, &circleImg, &finalHoughImg});
+    allocate_camera_fbs({&rgb888Img, &colorImg, &grayImg, &gradImg, &uint16Img, &hsvImg, &circleImg, &finalHoughImg});
     
     ESP_LOGD(CAM, "Allocating circle buffers");
     circleCoordinates = (int16_t**) ps_malloc((MAX_RAD-MIN_RAD+1)*sizeof(int16_t*));
@@ -1029,8 +1029,8 @@ void setup() {
 
 void loop() {
     static camera_fb_t *finalImg;
-    static std::vector<Pixel> balls; balls.clear();
-    resetImg(&circleImg);
+    static std::unordered_map<Color, std::vector<Pixel>> balls = {{Color::Blue, {}}, {Color::Red, {}}};
+
     MyFuncTimer _t("LOOP");
     // ESP_LOGI(CAM, "LOOPING");
     ESP_LOGV(CAM, "cam_task stack watermark: %d bytes\n", uxTaskGetStackHighWaterMark(NULL));
@@ -1041,9 +1041,6 @@ void loop() {
 
     analyzeImg(fb, &finalImg, &balls);
     // tuneColorThresholds(fb, &finalImg);
-
-
-
 
     ESP_LOGD(CAM, "Finished processing");
     checkMem("After Processing");
