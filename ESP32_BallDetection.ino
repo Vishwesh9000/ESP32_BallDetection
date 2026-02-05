@@ -128,8 +128,10 @@ struct Pixel {
 };
 
 struct Ball {
-    uint16_t x,y,r;
+    uint16_t x=0,y=0,r=0,i=0;
     Color color;
+    Ball(const Pixel& p, uint16_t rad):
+        x(p.x), y(p.y), r(rad), i(p.i){}
 };
 
 constexpr camera_fb_t rgbImgTemplate =  {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}},
@@ -865,23 +867,26 @@ void drawGuideCircles(camera_fb_t *fb, uint32_t intensity) {
     drawCircle<T>(fb, MAX_RAD, MAX_RAD, MAX_RAD, intensity);
 }
 
-void ballsFromPixels(std::vector<std::vector<Pixel>> *pixels, std::vector<Pixel> *final_balls) {
+void ballsFromPixels(std::vector<std::vector<Pixel>> *pixels, std::vector<Ball> *final_balls) {
     size_t num_pixels = 0;
     for (const auto& inner : *pixels) {
         num_pixels += inner.size();
     }
 
-    static std::vector<Pixel> balls; 
-    balls.clear(); balls.reserve(num_pixels);
-    for (const auto &inner : *pixels) {
-        balls.insert(balls.end(), inner.begin(), inner.end());
+    static std::vector<Ball> balls; balls.clear(); balls.reserve(num_pixels);
+    uint16_t rad = MIN_RAD;    for (const auto &inner : *pixels) {
+        for (const auto &pixel : inner) {
+            balls.emplace_back(pixel, rad);
+        }
+        rad++;
+        // balls.insert(balls.end(), inner.begin(), inner.end());
     }
 
-    std::sort(balls.begin(), balls.end(), [](const Pixel& a, const Pixel& b) {return a.i > b.i;});
+    std::sort(balls.begin(), balls.end(), [](const Ball& a, const Ball& b) {return a.i > b.i;});
 
     final_balls->clear();
-    static auto is_overlapping = [](const Pixel& a, const Pixel& b) {
-        if (std::abs(static_cast<int32_t>(a.x)-static_cast<int32_t>(b.x)) < MIN_RAD && std::abs(static_cast<int32_t>(a.y) - static_cast<int32_t>(b.y)) < MIN_RAD) return true;
+    static auto is_overlapping = [](const Ball& a, const Ball& b) {
+        if (std::abs(static_cast<int32_t>(a.x)-static_cast<int32_t>(b.x)) < std::max(a.r, b.r) && std::abs(static_cast<int32_t>(a.y) - static_cast<int32_t>(b.y)) < std::max(a.r,b.r)) return true;
         else return false;
     };
     for (const auto& ball : balls) {
@@ -897,7 +902,7 @@ void ballsFromPixels(std::vector<std::vector<Pixel>> *pixels, std::vector<Pixel>
     }
 }
 
-void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Color, std::vector<Pixel>> *pFinal_balls) {
+void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Color, std::vector<Ball>> *pFinal_balls) {
     static std::vector<std::vector<Pixel>> maxPixels(MAX_RAD-MIN_RAD+1); int bestR;
     resetImg(&circleImg);
 
@@ -931,7 +936,7 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Colo
             Serial.print("\n");
 
             ballsFromPixels(&maxPixels, &balls);
-            for (auto& ball : balls) drawCircle<uint8_t>(&circleImg, ball.x, ball.y, MAX_RAD, 250);
+            for (auto& ball : balls) drawCircle<uint8_t>(&circleImg, ball.x, ball.y, ball.r, 250);
         }
         else {
             Serial.println("\tNo circles detected");
@@ -1029,7 +1034,7 @@ void setup() {
 
 void loop() {
     static camera_fb_t *finalImg;
-    static std::unordered_map<Color, std::vector<Pixel>> balls = {{Color::Blue, {}}, {Color::Red, {}}};
+    static std::unordered_map<Color, std::vector<Ball>> balls = {{Color::Blue, {}}, {Color::Red, {}}};
 
     MyFuncTimer _t("LOOP");
     // ESP_LOGI(CAM, "LOOPING");
