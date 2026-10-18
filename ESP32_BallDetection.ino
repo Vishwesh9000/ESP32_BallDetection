@@ -11,9 +11,11 @@
 #include <type_traits>
 #include <vector>
 #include <unordered_map>
+#include <array>
 #include <utility>
 #include <tuple>
 #include <string>
+#include <type_traits>
 
 #include "esp_log.h"
 
@@ -65,8 +67,69 @@ static camera_config_t camera_config = {
 };
 
 
-enum class Color {Red, Blue, Black, Brown, Other}; 
-const std::unordered_map<Color, std::string> colorToStr = {{Color::Red, "Red"}, {Color::Blue, "Blue"}, {Color::Black, "Black"}, {Color::Brown, "Brown"}, {Color::Other, "Other"}};
+enum class Color {Red, Blue, Black, Brown, Other, _NUM_COLORS};
+constexpr auto _NumColors = static_cast<std::underlying_type_t<Color>>(Color::_NUM_COLORS);
+struct colorStringsStruct {
+    static constexpr std::array<std::string_view, _NumColors> rawStrings{{
+        "Red", "Blue", "Black", "Brown", "Other"
+    }};
+    std::string_view operator[](Color c) {
+        return rawStrings[static_cast<std::underlying_type_t<Color>>(c)];
+    }
+};
+struct colorStringsStruct colorStringsMap;
+
+using _RGBcolor = std::array<uint8_t, 3>;
+using _ColorShades = std::array<_RGBcolor, 3>;
+
+struct ColorShadesStruct {
+    const std::array<_ColorShades, _NumColors> rawShades;
+    constexpr const _ColorShades& operator[](Color c) const {
+        return rawShades[static_cast<std::underlying_type_t<Color>>(c)];
+    }
+};
+
+constexpr ColorShadesStruct colorShadesMap {{{
+    {{ // Red
+        {{255,0,0}},
+        {{255,89,89}},
+        {{255,179,179}}
+    }},
+    {{ // Blue
+        {{0,0,255}},
+        {{89,89,255}},
+        {{179,179,255}}
+    }},
+    {{ // Black
+        {{0,0,0}},
+        {{89,89,89}},
+        {{179,179,179}}
+    }},
+    {{ // Brown
+        {{150,75,0}},
+        {{187,138,89}},
+        {{224,201,179}}
+    }},
+    {{ // Other
+        {{0,150,0}},
+        {{89,187,89}},
+        {{179,224,179}}
+    }}
+    // Enum Value	Variant 1: Vibrant (Base)	Variant 2: Medium (35% Tint)	Variant 3: Light (70% Tint)
+    // Red	(255, 0, 0)	(255, 89, 89)	(255, 179, 179)
+    // Blue	(0, 0, 255)	(89, 89, 255)	(179, 179, 255)
+    // Black	(0, 0, 0)	(89, 89, 89)	(179, 179, 179)
+    // Brown	(150, 75, 0)	(187, 138, 89)	(224, 201, 179)
+    // Other	(0, 150, 0)	(89, 187, 89)	(179, 224, 179)
+}}};
+
+
+
+
+
+
+
+
 enum class Mode {ShowCameraFeed, ShowColors, ShowGradient, ShowHoughTransform, ShowCircles};
 
 struct HSV {
@@ -145,6 +208,7 @@ camera_fb_t colorImg = rgbImgTemplate;
 camera_fb_t grayImg = grayscaleImgTemplate;
 camera_fb_t gradImg = grayscaleImgTemplate;
 camera_fb_t uint16Img = uint16ImgTemplate;
+camera_fb_t outputImg = rgbImgTemplate;
 camera_fb_t jpgImg = {.buf=nullptr, .len=0, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_JPEG, .timestamp={0,0}};
 
 camera_fb_t hsvImg = rgbImgTemplate;
@@ -158,6 +222,7 @@ Mode mode = Mode::ShowColors;
 
 WiFiServer server(8888);
 WiFiClient client;
+bool clientConnected = false;
 
 
 void init_camera(){
@@ -421,20 +486,25 @@ void convertToGrayScale(camera_fb_t *pIn, camera_fb_t *pOut, bool weighted=false
     }
 }
 
-void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, int threshold, uint8_t channel = 3) {
+void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, int threshold, const std::array<uint8_t, 3> *color, uint8_t alpha = 100) {
     if (pMaskImg->format != PIXFORMAT_GRAYSCALE) logErrorAndRestart("[applyMask()]: maskImg not grayscale");
     if (pInImg->format != PIXFORMAT_RGB888) logErrorAndRestart("[applyMask()]: Format not supported for pInImg/pOutImg");
-    if (channel > 3) logErrorAndRestart("[applyMask()]: Channel Invalid");
+    // if (channel > 3) logErrorAndRestart("[applyMask()]: Channel Invalid");
+
+    uint32_t a = alpha;
+
     uint8_t *pIn = pInImg->buf, *pMask = pMaskImg->buf;
     for (; pMask-pMaskImg->buf < pMaskImg->len; pIn+=3, pMask++) {
         if (*pMask > threshold) {
-            if (channel == 3) {
-                pIn[0] = *pMask;
-                pIn[1] = *pMask;
-                pIn[2] = *pMask;
+            if (color == nullptr) {
+                pIn[0] = (a * *pMask + (100-a) * pIn[0]) / 100;
+                pIn[1] = (a * *pMask + (100-a) * pIn[1]) / 100;
+                pIn[2] = (a * *pMask + (100-a) * pIn[2]) / 100;
             }
             else {
-                pIn[channel] = *pMask;
+                pIn[0] = (a * *pMask * (*color)[0] / 255 + (100-a) * pIn[0]) / 100;
+                pIn[1] = (a * *pMask * (*color)[1] / 255 + (100-a) * pIn[1]) / 100;
+                pIn[2] = (a * *pMask * (*color)[2] / 255 + (100-a) * pIn[2]) / 100;
             }
         }
     }
@@ -552,7 +622,7 @@ Color pixelColor(int r, int g, int b) {
     // if (hsv.v < 60 && hsv.s < 60) return Color::Black;
     // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 100 && IN_RANGE(hsv.v, 90, 140) && r > 120) return Color::Red;
 
-    if (IN_RANGE(hsv.h, 240, 360) && hsv.s > 50) return Color::Blue; //Good on FMS 2 LEDs
+    if (IN_RANGE(hsv.h, 240, 360) && hsv.s > 70) return Color::Blue; //Good on FMS 2 LEDs
     if (IN_RANGE(hsv.h, 45, 90) && hsv.s > 50 && IN_RANGE(hsv.v, 90, 190) && r > 110) return Color::Red;
     if (hsv.v < 60 && hsv.s < 60) return Color::Black;
     
@@ -837,7 +907,7 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
 
 //minR and maxR are inclusive; pOutmgs should be a pointer to a uint8 camera frame camera_fb_t's
 int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pFinalImg, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels) {
-    int bestR = 0;
+    int bestR = minR;
     Pixel maxPixel = {0,0,0}, curPixel;
     for (int r = minR, i = 0; r <= maxR; r++, i++) {
         houghTransform(pInImg, &uint16Img, r);
@@ -897,12 +967,62 @@ void ballsFromPixels(std::vector<std::vector<Pixel>> *pixels, std::vector<Ball> 
     }
 }
 
+bool updateClientConnection() {
+    if (!client || !client.connected()) {
+        client.stop();
+        if (clientConnected) {
+            Serial.println("Client disconnected");
+            clientConnected = false;
+        }
+        client = server.accept();
+    }
+    if (client && client.connected()) {
+        if (!clientConnected) {
+            Serial.println("Client connected");
+            clientConnected = true;
+        }
+        return true;
+    }
+    else return false;
+}
+
+bool sendLogViaWiFi(const char* msg, ...) {
+    if (updateClientConnection()) {
+        uint8_t msgBuf[100];
+        va_list args;
+        va_start(args, msg);
+        int32_t written = vsnprintf(reinterpret_cast<char*>(msgBuf), sizeof(msgBuf), msg, args) + 1; // +1 for null terminator
+        va_end(args);
+        client.write("MS", 2); // Message Start
+        client.write(0x01); // Log Message Identifier
+        client.write(reinterpret_cast<const uint8_t*>(&written), sizeof(written)); //4 bytes (signed because of python)
+        client.write(msgBuf, written);
+        return true;
+    }
+    else return false;
+}
+
+bool sendImgViaWiFi(camera_fb_t *img) {
+    if (updateClientConnection()) {
+        updateJPGBuffer(img);
+        int32_t len = static_cast<int32_t>(jpgImg.len);
+        client.write("MS", 2); // Message Start
+        client.write(0x02); // Image Message Identifier
+        client.write(reinterpret_cast<const uint8_t*>(&len), sizeof(len)); //4 bytes (signed because of python)
+        client.write(jpgImg.buf, len);
+        return true;
+    }
+    else return false;
+}
+
 void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Color, std::vector<Ball>> *pFinal_balls) {
     static std::vector<std::vector<Pixel>> maxPixels(MAX_RAD-MIN_RAD+1); int bestR;
     resetImg(&circleImg);
 
     {MyFuncTimer _t("updateRGBBuffer()");
     updateRGBBuffer(pFb);}
+
+    memcpy(outputImg.buf, rgb888Img.buf, rgb888Img.len);
     
     Serial.println("Pixels:");
     for (auto& [color, balls] : *pFinal_balls) {
@@ -917,12 +1037,12 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Colo
         {MyFuncTimer _t("multipleHoughTransform()");
         bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels);} //TODO: consider balls from multiple rads
         
-        Serial.printf("\t[%s]\n", colorToStr.at(color).c_str());
+        Serial.printf("\t[%.*s]\n", colorStringsMap[color].size(), colorStringsMap[color].data());
         if (!maxPixels[bestR-MIN_RAD].empty()) {
-            Serial.printf("\t\tBestR: %d\n", bestR);
+            // Serial.printf("\t\tBestR: %d\n", bestR);
             for (int r = MIN_RAD; r <= MAX_RAD; r++) {
                 if (maxPixels[r-MIN_RAD].empty()) continue;
-                Serial.printf("\t\tRadius %d:", r);
+                // Serial.printf("\t\tRadius %d:", r);
                 auto &curMaxPixels = maxPixels[r-MIN_RAD];
                 for (auto p = curMaxPixels.begin(); p < curMaxPixels.begin() + std::min<size_t>(curMaxPixels.size(), 3); p++) {
                     Serial.printf("\t(%d, %d): %d", p->x, p->y, p->i);
@@ -936,23 +1056,27 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Colo
 
             ballsFromPixels(&maxPixels, &balls);
             for (auto& ball : balls) drawCircle<uint8_t>(&circleImg, ball.x, ball.y, ball.r, 250);
+    
         }
         else {
             Serial.println("\tNo circles detected");
         }
-        applyMask(&rgb888Img, &gradImg, 120, 0);
+        applyMask(&outputImg, &gradImg, 120, &(colorShadesMap[color][0]), 50);
+        applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[color][1]), 50);
+        resetImg(&circleImg);
     }
     Serial.println("Balls:");
     for (const auto& [color, balls] : *pFinal_balls) {
-        Serial.printf("\t[%s] (%d) balls found\n", colorToStr.at(color).c_str(), balls.size());
+        Serial.printf("\t%.*s: %d ball(s)\n", colorStringsMap[color].size(), colorStringsMap[color].data(), balls.size());
+        sendLogViaWiFi("%.*s: %d ball(s)", colorStringsMap[color].size(), colorStringsMap[color].data(), balls.size());
         for (const auto& ball : balls) {
             Serial.printf("\t\t(%d,%d): %d\n", ball.x, ball.y, ball.i);
         }
     }
     
     drawGuideCircles<uint8_t>(&circleImg, 200);
-    applyMask(&rgb888Img, &circleImg, 120, 1);
-    *pOutImg = &rgb888Img;
+    applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[Color::Other][1]), 50)
+    *pOutImg = &outputImg;
 }
 
 void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg, Color color) {
@@ -969,9 +1093,33 @@ void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg, Color color) {
     calculateGradBuffer(&colorImg, &gradImg);}
 
     {MyFuncTimer _t("applyMask() HSV");
-    applyMask(&hsvImg, &gradImg, 120, 3);}
+    applyMask(&hsvImg, &gradImg, 120, nullptr);}
     *pOutImg = &hsvImg;
 }
+
+
+void testFunc(camera_fb_t *pFb, camera_fb_t **pOutImg) {
+    Color color = Color::Blue;
+
+    updateRGBBuffer(pFb);
+    resetImg(&colorImg);
+    for (size_t i = 0; i < rgb888Img.len; i+=3) {
+        HSV hsv{rgb888Img.buf[i], rgb888Img.buf[i+1], rgb888Img.buf[i+2]};
+        if (pixelColor(rgb888Img.buf[i], rgb888Img.buf[i+1], rgb888Img.buf[i+2]) == color) {
+            colorImg.buf[i] = hsv.h/4;
+            colorImg.buf[i+1] = hsv.s/2;
+            colorImg.buf[i+2] = hsv.v/2;
+        }
+        else {
+            colorImg.buf[i] = hsv.h/2;
+            colorImg.buf[i+1] = hsv.s;
+            colorImg.buf[i+2] = hsv.v;
+        }
+    }
+    
+    *pOutImg = &colorImg;
+}
+
 
 
 void setup() {
@@ -986,7 +1134,7 @@ void setup() {
     else                {ESP_LOGW(CAM, "PSRAM not available"); delay(10000); ESP.restart();}
 
     ESP_LOGD(CAM, "Allocating Img Buffers");
-    allocate_camera_fbs({&rgb888Img, &colorImg, &grayImg, &gradImg, &uint16Img, &hsvImg, &circleImg, &finalHoughImg});
+    allocate_camera_fbs({&rgb888Img, &colorImg, &grayImg, &gradImg, &uint16Img, &hsvImg, &circleImg, &finalHoughImg, &outputImg});
     
     ESP_LOGD(CAM, "Allocating circle buffers");
     circleCoordinates = (int16_t**) ps_malloc((MAX_RAD-MIN_RAD+1)*sizeof(int16_t*));
@@ -1043,36 +1191,21 @@ void loop() {
     camera_fb_t *fb;
     {MyFuncTimer _t("camera_capture()");
     fb = camera_capture();}
-    {MyFuncTimer _t("processing");
+    {MyFuncTimer _t("processing time");
     analyzeImg(fb, &finalImg, &balls);
     // tuneColorThresholds(fb, &finalImg, Color::Blue);
+    // testFunc(fb, &finalImg);
     }
 
     ESP_LOGD(CAM, "Finished processing");
     checkMem("After Processing");
-    if (!(client && client.connected())) {
-        client = server.accept();
-        if (client) {
-            Serial.println("Client Connected");
-        }
-        else {
-            // {MyFuncTimer _t("Normal printImg");
-            // printImg(&finalHoughImg);}
-            ESP_LOGI(CAM, "No client, delaying ...");
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
-    }
-    if (client && client.connected()) {
-        // client.write(fb->buf, fb->len);
-        // delay(1000);
-        
-        updateJPGBuffer(finalImg);
-        ESP_LOGD(CAM, "Updated JPG");
-        client.write(jpgImg.buf, jpgImg.len);
+
+    if (sendImgViaWiFi(finalImg)) {
         ESP_LOGD(CAM, "Sent image via WiFi");
-        // delay(1000);
-        // updateJPGBuffer(&houghImg);
-        // client.write(jpgImg.buf, jpgImg.len);
+    }
+    else {
+        ESP_LOGD(CAM, "No client, delaying ...");
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     esp_camera_fb_return(fb);
