@@ -1,3 +1,4 @@
+#include "Arduino.h"
 #define CAMERA_MODEL_WROVER_KIT
 #include "esp_camera.h"
 #include "cameraPins.h"
@@ -19,8 +20,8 @@
 #define IMG_WIDTH 320
 #define IMG_HEIGHT 240
 
-#define MIN_RAD 25 //Inclusive
-#define MAX_RAD 40 //Inclusive
+#define MIN_RAD 10 //Inclusive
+#define MAX_RAD 25 //Inclusive
 
 #define IN_RANGE(x,min,max) (((x) < (max)) && ((x) > (min)))
 
@@ -56,7 +57,7 @@ static camera_config_t camera_config = {
     .frame_size = FRAMESIZE_QVGA, //QQVGA-UXGA, For ESP32, do not use sizes above QVGA when not JPEG. 
                                   // The performance of the ESP32-S series has improved a lot, but JPEG mode always gives better frame rates.
 
-    .jpeg_quality = 12, //0-63, for OV series camera sensors, lower number means higher quality
+    .jpeg_quality = 5, //0-63, for OV series camera sensors, lower number means higher quality
     .fb_count = 2, //When jpeg mode is used, if fb_count more than one, the driver will work in continuous mode.
     .fb_location = CAMERA_FB_IN_PSRAM,
     .grab_mode = CAMERA_GRAB_LATEST//. Sets when buffers should be filled CAMERA_GRAB_WHEN_EMPTY CAMERA_GRAB_LATEST
@@ -64,7 +65,8 @@ static camera_config_t camera_config = {
 };
 
 
-enum class Color {Red, Blue, Black, Brown, Other}; const std::unordered_map<Color, std::string> colorToStr = {{Color::Red, "Red"}, {Color::Blue, "Blue"}, {Color::Black, "Black"}, {Color::Brown, "Brown"}, {Color::Other, "Other"}};
+enum class Color {Red, Blue, Black, Brown, Other}; 
+const std::unordered_map<Color, std::string> colorToStr = {{Color::Red, "Red"}, {Color::Blue, "Blue"}, {Color::Black, "Black"}, {Color::Brown, "Brown"}, {Color::Other, "Other"}};
 enum class Mode {ShowCameraFeed, ShowColors, ShowGradient, ShowHoughTransform, ShowCircles};
 
 struct HSV {
@@ -546,31 +548,18 @@ Color pixelColor(int r, int g, int b) {
     
     // return Color::Other;
     HSV hsv(r,g,b);
-    if (IN_RANGE(hsv.h, 240, 360)) return Color::Blue;
-    // if (hsv.v<60 && hsv.s < 80) return Color::Black;
+    // if (IN_RANGE(hsv.h, 240, 360)) return Color::Blue;
+    // if (hsv.v < 60 && hsv.s < 60) return Color::Black;
+    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 100 && IN_RANGE(hsv.v, 90, 140) && r > 120) return Color::Red;
+
+    if (IN_RANGE(hsv.h, 240, 360) && hsv.s > 50) return Color::Blue; //Good on FMS 2 LEDs
+    if (IN_RANGE(hsv.h, 45, 90) && hsv.s > 50 && IN_RANGE(hsv.v, 90, 190) && r > 110) return Color::Red;
+    if (hsv.v < 60 && hsv.s < 60) return Color::Black;
+    
 
 
-
-    // if (IN_RANGE(hsv.h, 50, 130) && hsv.s > 100 && IN_RANGE(hsv.v, 50, 140)) return Color::Red;
-    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 100 && IN_RANGE(hsv.v, 90, 140)) return Color::Red; //Good Lamp Light Home Phone Flashlight
-
-
-    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 90, 140)) return Color::Red;
-    //OG
-    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
-
-    // V1
-    if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
-
-    // V2
-    // Extremely high saturation
-    // if (hsv.s x> 160) return Color::Red; 
-    //Way to selective (balls not round) + tons of bg noise
-
-    // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 90 && IN_RANGE(hsv.v, 60, 140)) return Color::Red;
 
     
-    // if (hsv.h > 60 && hsv.h < 120 && hsv.s > 40 && hsv.v > 40 && hsv.v < 100) return Color::Brown;
 
     return Color::Other;
 }
@@ -588,10 +577,14 @@ void selectColor(camera_fb_t* img, camera_fb_t* colorImg, Color color, bool debu
                 colorImg->buf[i+2] = 255;
             }
             else {
-                HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]);
-                colorImg->buf[i] = hsv.h/2;
-                colorImg->buf[i+1] = hsv.s;
-                colorImg->buf[i+2] = hsv.v;
+                // HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]);
+                // colorImg->buf[i] = hsv.h/2;
+                // colorImg->buf[i+1] = hsv.s;
+
+                // colorImg->buf[i+2] = hsv.v;
+                colorImg->buf[i] = img->buf[i];
+                colorImg->buf[i+1] = img->buf[i+1];
+                colorImg->buf[i+2] = img->buf[i+2];
             }
         }
 
@@ -601,13 +594,15 @@ void selectColor(camera_fb_t* img, camera_fb_t* colorImg, Color color, bool debu
                 colorImg->buf[i+1] = 0;
                 colorImg->buf[i+2] = 0;
             }
-        else {
-            HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]); 
-            colorImg->buf[i] = hsv.h/4; // division for differentiation with focused parts
-            colorImg->buf[i+1] = hsv.s/2;
-            colorImg->buf[i+2] = hsv.v/2;
-        }
-
+            else {
+                // HSV hsv(img->buf[i], img->buf[i+1], img->buf[i+2]); 
+                // colorImg->buf[i] = hsv.h/2; // division for differentiation with focused parts
+                // colorImg->buf[i+1] = hsv.s;
+                // colorImg->buf[i+2] = hsv.v;
+                colorImg->buf[i] = img->buf[i];
+                colorImg->buf[i+1] = img->buf[i+1];
+                colorImg->buf[i+2] = img->buf[i+2];
+            }
         }
     }
 }
@@ -847,7 +842,7 @@ int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pFinalImg, int minR
     for (int r = minR, i = 0; r <= maxR; r++, i++) {
         houghTransform(pInImg, &uint16Img, r);
         (*pMaxPixels)[i].reserve(10);
-        pixelsAboveThreshold<uint16_t>(&uint16Img, &((*pMaxPixels)[i]), 12288); // 8192, 12288, 16384, 20480
+        pixelsAboveThreshold<uint16_t>(&uint16Img, &((*pMaxPixels)[i]), 8'192); // 8192, 12288, 16384, 20480
         
         if (!((*pMaxPixels)[i].empty())) curPixel = (*pMaxPixels)[i][0];
         else curPixel = findMaxPixel<uint16_t>(&uint16Img);
@@ -920,7 +915,7 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Colo
         calculateGradBuffer(&colorImg, &gradImg);}
 
         {MyFuncTimer _t("multipleHoughTransform()");
-        bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels);}
+        bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels);} //TODO: consider balls from multiple rads
         
         Serial.printf("\t[%s]\n", colorToStr.at(color).c_str());
         if (!maxPixels[bestR-MIN_RAD].empty()) {
@@ -928,9 +923,13 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Colo
             for (int r = MIN_RAD; r <= MAX_RAD; r++) {
                 if (maxPixels[r-MIN_RAD].empty()) continue;
                 Serial.printf("\t\tRadius %d:", r);
-                for (const Pixel& p : maxPixels[r-MIN_RAD]) {
-                    Serial.printf("\t(%d, %d): %d", p.x, p.y, p.i);
+                auto &curMaxPixels = maxPixels[r-MIN_RAD];
+                for (auto p = curMaxPixels.begin(); p < curMaxPixels.begin() + std::min<size_t>(curMaxPixels.size(), 3); p++) {
+                    Serial.printf("\t(%d, %d): %d", p->x, p->y, p->i);
                 }
+                // for (const Pixel& p : maxPixels[r-MIN_RAD]) {
+                //     Serial.printf("\t(%d, %d): %d", p.x, p.y, p.i);
+                // }
                 Serial.print("\n");
             }
             Serial.print("\n");
@@ -973,6 +972,7 @@ void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg, Color color) {
     applyMask(&hsvImg, &gradImg, 120, 3);}
     *pOutImg = &hsvImg;
 }
+
 
 void setup() {
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1034,7 +1034,7 @@ void setup() {
 
 void loop() {
     static camera_fb_t *finalImg;
-    static std::unordered_map<Color, std::vector<Ball>> balls = {{Color::Blue, {}}, {Color::Red, {}}};
+    static std::unordered_map<Color, std::vector<Ball>> balls = {{Color::Blue, {}}, /*{Color::Black, {}},*/ {Color::Red, {}}};
 
     MyFuncTimer _t("LOOP");
     // ESP_LOGI(CAM, "LOOPING");
@@ -1043,9 +1043,10 @@ void loop() {
     camera_fb_t *fb;
     {MyFuncTimer _t("camera_capture()");
     fb = camera_capture();}
-
+    {MyFuncTimer _t("processing");
     analyzeImg(fb, &finalImg, &balls);
-    // tuneColorThresholds(fb, &finalImg);
+    // tuneColorThresholds(fb, &finalImg, Color::Blue);
+    }
 
     ESP_LOGD(CAM, "Finished processing");
     checkMem("After Processing");
@@ -1055,8 +1056,8 @@ void loop() {
             Serial.println("Client Connected");
         }
         else {
-            {MyFuncTimer _t("Normal printImg");
-            printImg(&finalHoughImg);}
+            // {MyFuncTimer _t("Normal printImg");
+            // printImg(&finalHoughImg);}
             ESP_LOGI(CAM, "No client, delaying ...");
             vTaskDelay(pdMS_TO_TICKS(2000));
         }
@@ -1075,6 +1076,6 @@ void loop() {
     }
 
     esp_camera_fb_return(fb);
-    vTaskDelay(pdMS_TO_TICKS(3000)); 
+    vTaskDelay(pdMS_TO_TICKS(200)); 
     checkMem("After Delay");
 }
