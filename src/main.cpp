@@ -1,7 +1,7 @@
 #include "Arduino.h"
 #define CAMERA_MODEL_WROVER_KIT
 #include "esp_camera.h"
-#include "cameraPins.h"
+#include "camera_pins.h"
 
 #include <WiFi.h>
 
@@ -1075,7 +1075,7 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Colo
     }
     
     drawGuideCircles<uint8_t>(&circleImg, 200);
-    applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[Color::Other][1]), 50)
+    applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[Color::Other][1]), 50);
     *pOutImg = &outputImg;
 }
 
