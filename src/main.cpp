@@ -4,6 +4,7 @@
 #include "camera_pins.h"
 
 #include <WiFi.h>
+#include "timer/timer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -23,7 +24,7 @@
 #define IMG_HEIGHT 240
 
 #define MIN_RAD 10 //Inclusive
-#define MAX_RAD 25 //Inclusive
+#define MAX_RAD 17 //Inclusive
 
 #define IN_RANGE(x,min,max) (((x) < (max)) && ((x) > (min)))
 
@@ -77,7 +78,7 @@ struct colorStringsStruct {
         return rawStrings[static_cast<std::underlying_type_t<Color>>(c)];
     }
 };
-struct colorStringsStruct colorStringsMap;
+struct colorStringsStruct colorStringMap;
 
 using _RGBcolor = std::array<uint8_t, 3>;
 using _ColorShades = std::array<_RGBcolor, 3>;
@@ -123,7 +124,7 @@ constexpr ColorShadesStruct colorShadesMap {{{
     // Other	(0, 150, 0)	(89, 187, 89)	(179, 224, 179)
 }}};
 
-
+std::unordered_map<Color, int> ballCounts;
 
 
 
@@ -1016,11 +1017,25 @@ bool sendImgViaWiFi(camera_fb_t *img) {
 }
 
 void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Color, std::vector<Ball>> *pFinal_balls) {
-    static std::vector<std::vector<Pixel>> maxPixels(MAX_RAD-MIN_RAD+1); int bestR;
+    Timer timer("analyzeImg()");
+
+    static bool initArray = false;
+    static std::unordered_map<Color, std::vector<int>> ballCounts;
+    static std::unordered_map<Color, int> curBallCount;
+    if (!initArray) {
+        for (auto [color, _] : *pFinal_balls) {
+            ballCounts[color] = {};
+        }
+        initArray = true;
+    }
+    
+    static std::vector<std::vector<Pixel>> maxPixels(MAX_RAD-MIN_RAD+1); 
+    int bestR;
     resetImg(&circleImg);
 
-    {MyFuncTimer _t("updateRGBBuffer()");
-    updateRGBBuffer(pFb);}
+    timer.recordCheckpoint("setup");
+    updateRGBBuffer(pFb);
+    timer.recordCheckpoint("updateRGBBuffer");
 
     memcpy(outputImg.buf, rgb888Img.buf, rgb888Img.len);
     
@@ -1028,52 +1043,85 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Colo
     for (auto& [color, balls] : *pFinal_balls) {
         balls.clear();
         for (auto& pixels : maxPixels) pixels.clear();
-        {MyFuncTimer _t("selectColor()");
-        selectColor(&rgb888Img, &colorImg, color);}
-
-        {MyFuncTimer _t("calculateGradBuffer()");
-        calculateGradBuffer(&colorImg, &gradImg);}
-
-        {MyFuncTimer _t("multipleHoughTransform()");
-        bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels);} //TODO: consider balls from multiple rads
         
-        Serial.printf("\t[%.*s]\n", colorStringsMap[color].size(), colorStringsMap[color].data());
+        selectColor(&rgb888Img, &colorImg, color);
+        timer.recordCheckpoint("selectColor");
+
+
+        calculateGradBuffer(&colorImg, &gradImg);
+        timer.recordCheckpoint("calcGradBuffer");
+
+        bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels); //TODO: consider balls from multiple rads
+        timer.recordCheckpoint("multipleHoughTransform");
+        
+        Serial.printf("\t[%.*s]\n", colorStringMap[color].size(), colorStringMap[color].data());
         if (!maxPixels[bestR-MIN_RAD].empty()) {
             // Serial.printf("\t\tBestR: %d\n", bestR);
-            for (int r = MIN_RAD; r <= MAX_RAD; r++) {
-                if (maxPixels[r-MIN_RAD].empty()) continue;
-                // Serial.printf("\t\tRadius %d:", r);
-                auto &curMaxPixels = maxPixels[r-MIN_RAD];
-                for (auto p = curMaxPixels.begin(); p < curMaxPixels.begin() + std::min<size_t>(curMaxPixels.size(), 3); p++) {
-                    Serial.printf("\t(%d, %d): %d", p->x, p->y, p->i);
-                }
-                // for (const Pixel& p : maxPixels[r-MIN_RAD]) {
-                //     Serial.printf("\t(%d, %d): %d", p.x, p.y, p.i);
-                // }
-                Serial.print("\n");
-            }
-            Serial.print("\n");
+            // for (int r = MIN_RAD; r <= MAX_RAD; r++) {
+            //     if (maxPixels[r-MIN_RAD].empty()) continue;
+            //     // Serial.printf("\t\tRadius %d:", r);
+            //     auto &curMaxPixels = maxPixels[r-MIN_RAD];
+            //     for (auto p = curMaxPixels.begin(); p < curMaxPixels.begin() + std::min<size_t>(curMaxPixels.size(), 3); p++) {
+            //         Serial.printf("\t(%d, %d): %d", p->x, p->y, p->i);
+            //     }
+            //     // for (const Pixel& p : maxPixels[r-MIN_RAD]) {
+            //     //     Serial.printf("\t(%d, %d): %d", p.x, p.y, p.i);
+            //     // }
+            //     Serial.print("\n");
+            // }
+            // Serial.print("\n");
 
             ballsFromPixels(&maxPixels, &balls);
             for (auto& ball : balls) drawCircle<uint8_t>(&circleImg, ball.x, ball.y, ball.r, 250);
-    
+
         }
         else {
             Serial.println("\tNo circles detected");
         }
         applyMask(&outputImg, &gradImg, 120, &(colorShadesMap[color][0]), 50);
         applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[color][1]), 50);
+
         resetImg(&circleImg);
+        timer.recordCheckpoint("Color loop done");
     }
     Serial.println("Balls:");
     for (const auto& [color, balls] : *pFinal_balls) {
-        Serial.printf("\t%.*s: %d ball(s)\n", colorStringsMap[color].size(), colorStringsMap[color].data(), balls.size());
-        sendLogViaWiFi("%.*s: %d ball(s)", colorStringsMap[color].size(), colorStringsMap[color].data(), balls.size());
+        Serial.printf("\t%.*s: %d ball(s)\n", colorStringMap[color].size(), colorStringMap[color].data(), balls.size());
+        sendLogViaWiFi("%.*s: %d ball(s)", colorStringMap[color].size(), colorStringMap[color].data(), balls.size());
         for (const auto& ball : balls) {
             Serial.printf("\t\t(%d,%d): %d\n", ball.x, ball.y, ball.i);
         }
     }
-    
+    timer.recordCheckpoint("Image Processing Done");
+
+    //Update tracker
+    int totalBalls = 0;
+    static bool detectedBalls = false;
+    for (auto [color, balls] : *pFinal_balls) {
+        ballCounts[color].push_back(balls.size());
+        totalBalls += balls.size();
+    }
+
+    if (totalBalls == 0) {
+        if (detectedBalls) {
+            for (auto& [color, balls] : ballCounts) {
+                balls.pop_back();
+                std::sort(balls.begin(), balls.end());
+                Serial.printf("Final %.*s: %d", colorStringMap[color].size(), colorStringMap[color].data(), balls[balls.size()/2]);
+                sendLogViaWiFi("Final %.*s: %d", colorStringMap[color].size(), colorStringMap[color].data(), balls[balls.size()/2]);
+                balls.clear();
+            }
+            detectedBalls = false;
+        }
+        for (auto& [color, balls] : ballCounts) {
+            balls.clear();
+        }
+
+    }
+    else {
+        detectedBalls = true;
+    }
+    timer.recordCheckpoint("Tracking");
     drawGuideCircles<uint8_t>(&circleImg, 200);
     applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[Color::Other][1]), 50);
     *pOutImg = &outputImg;
@@ -1096,30 +1144,6 @@ void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg, Color color) {
     applyMask(&hsvImg, &gradImg, 120, nullptr);}
     *pOutImg = &hsvImg;
 }
-
-
-void testFunc(camera_fb_t *pFb, camera_fb_t **pOutImg) {
-    Color color = Color::Blue;
-
-    updateRGBBuffer(pFb);
-    resetImg(&colorImg);
-    for (size_t i = 0; i < rgb888Img.len; i+=3) {
-        HSV hsv{rgb888Img.buf[i], rgb888Img.buf[i+1], rgb888Img.buf[i+2]};
-        if (pixelColor(rgb888Img.buf[i], rgb888Img.buf[i+1], rgb888Img.buf[i+2]) == color) {
-            colorImg.buf[i] = hsv.h/4;
-            colorImg.buf[i+1] = hsv.s/2;
-            colorImg.buf[i+2] = hsv.v/2;
-        }
-        else {
-            colorImg.buf[i] = hsv.h/2;
-            colorImg.buf[i+1] = hsv.s;
-            colorImg.buf[i+2] = hsv.v;
-        }
-    }
-    
-    *pOutImg = &colorImg;
-}
-
 
 
 void setup() {
@@ -1191,11 +1215,8 @@ void loop() {
     camera_fb_t *fb;
     {MyFuncTimer _t("camera_capture()");
     fb = camera_capture();}
-    {MyFuncTimer _t("processing time");
     analyzeImg(fb, &finalImg, &balls);
     // tuneColorThresholds(fb, &finalImg, Color::Blue);
-    // testFunc(fb, &finalImg);
-    }
 
     ESP_LOGD(CAM, "Finished processing");
     checkMem("After Processing");
@@ -1209,6 +1230,6 @@ void loop() {
     }
 
     esp_camera_fb_return(fb);
-    vTaskDelay(pdMS_TO_TICKS(200)); 
+    vTaskDelay(pdMS_TO_TICKS(50)); 
     checkMem("After Delay");
 }

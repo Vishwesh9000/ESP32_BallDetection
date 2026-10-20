@@ -1,0 +1,3 @@
+[submodule "lib/my-custom-logging-utils"]
+	path = lib/my-custom-logging-utils
+	url = https://github.com/Vishwesh9000/my-custom-logging-utils
