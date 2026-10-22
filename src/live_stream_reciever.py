@@ -35,7 +35,7 @@ class StreamApp:
 
         self.logs = []
         self.max_logs = 5
-        self.log_label = tk.Label(self.root, text="Log: ", height=3)
+        self.log_label = tk.Label(self.root, text="Log: ", height=self.max_logs)
         self.log_label.pack(side="bottom", fill="x")
         tk.Button(self.btn_frame, text="Save Frame", command=self.save_image).pack(side="left", expand=True, fill="both")
         tk.Button(self.btn_frame, text="Revert 320x240", command=self.reset_size).pack(side="left", expand=True, fill="both")

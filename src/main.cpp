@@ -5,6 +5,7 @@
 
 #include <WiFi.h>
 #include "timer/timer.h"
+#include "logger/logger.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,7 +25,7 @@
 #define IMG_HEIGHT 240
 
 #define MIN_RAD 10 //Inclusive
-#define MAX_RAD 17 //Inclusive
+#define MAX_RAD 25 //Inclusive
 
 #define IN_RANGE(x,min,max) (((x) < (max)) && ((x) > (min)))
 
@@ -126,9 +127,12 @@ constexpr ColorShadesStruct colorShadesMap {{{
 
 std::unordered_map<Color, int> ballCounts;
 
-
-
-
+struct ImgAreaOfInterest {
+    int top;
+    int bottom;
+    int left;
+    int right;
+};
 
 
 enum class Mode {ShowCameraFeed, ShowColors, ShowGradient, ShowHoughTransform, ShowCircles};
@@ -512,8 +516,10 @@ void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, int threshold, const 
 } 
 
 
-void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2) {
-    resetImg(img2); resetImg(&uint16Img);
+void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2, ImgAreaOfInterest *area = nullptr) {
+    resetImg(img2); 
+    
+    resetImg(&uint16Img);
     uint8_t* rgb = img->buf;
     uint8_t* grad = img2->buf;
     uint16_t* gradE = reinterpret_cast<uint16_t*>(uint16Img.buf);
@@ -523,11 +529,23 @@ void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2) {
     uint32_t x0y0, x0y1, x0y2, x1y0, /*x1y1,*/ x1y2, x2y0, x2y1, x2y2;
     uint16_t maxg = 0;
 
-    for (y = 0; y < IMG_WIDTH*(IMG_HEIGHT-2); y+=IMG_WIDTH) {
+    size_t minY = 0; // Inclusive
+    size_t maxY = IMG_HEIGHT - 3; // Inclusive
+    size_t minX = 0; // Inclusive
+    size_t maxX = IMG_WIDTH - 3; // Inclusive
+
+    if (area != nullptr) {
+        minY = std::max<int>(minY, area->top);
+        maxY = std::min<int>(maxY, area->bottom);
+        minX = std::max<int>(minX, area->left);
+        maxX = std::min<int>(maxX, area->right);
+    }
+    
+    for (y = minY*IMG_WIDTH; y <= maxY*IMG_WIDTH; y+=IMG_WIDTH) {
         y1 = y+IMG_WIDTH;
         y2 = y1+IMG_WIDTH;
 
-        for (x = 0; x < IMG_WIDTH-2; x++) {
+        for (x = minX; x <= maxX; x++) {
             x1 = x+1;
             x2 = x1+1;
             x0y0 = (y+x)*3;
@@ -563,7 +581,7 @@ void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2) {
     int d = 1;
     while (maxg/d > 256) d++;
   
-    for (int i = 0; i < img2->len; i++) grad[i] = (uint8_t) (gradE[i]/d);
+    for (int i = 0; i < img2->len; i++) grad[i] = static_cast<uint8_t>(gradE[i]/d);
 }
 
 void calcCircleCoordinates(int16_t* buf, uint8_t r) {
@@ -623,8 +641,8 @@ Color pixelColor(int r, int g, int b) {
     // if (hsv.v < 60 && hsv.s < 60) return Color::Black;
     // if (IN_RANGE(hsv.h, 50, 90) && hsv.s > 100 && IN_RANGE(hsv.v, 90, 140) && r > 120) return Color::Red;
 
-    if (IN_RANGE(hsv.h, 240, 360) && hsv.s > 70) return Color::Blue; //Good on FMS 2 LEDs
-    if (IN_RANGE(hsv.h, 45, 90) && hsv.s > 50 && IN_RANGE(hsv.v, 90, 190) && r > 110) return Color::Red;
+    if (IN_RANGE(hsv.h, 240, 360) && hsv.s > 90) return Color::Blue; //Good on FMS 2 LEDs
+    if (IN_RANGE(hsv.h, 45, 80) && hsv.s > 50 && IN_RANGE(hsv.v, 90, 190) && r > 110) return Color::Red;
     if (hsv.v < 60 && hsv.s < 60) return Color::Black;
     
 
@@ -635,13 +653,34 @@ Color pixelColor(int r, int g, int b) {
     return Color::Other;
 }
 
-void selectColor(camera_fb_t* img, camera_fb_t* colorImg, Color color, bool debug = false) {
+bool selectColor(camera_fb_t* img, camera_fb_t* colorImg, Color color, ImgAreaOfInterest *areaOfColor = nullptr, bool debug = false) {
     resetImg(colorImg);
 
-    for (int i = 0; i < colorImg->len; i+=3) {
+    bool foundColor = false;
+    if (areaOfColor != nullptr) {
+        *areaOfColor = {
+            .top = IMG_HEIGHT-1,
+            .bottom = 0,
+            .left = IMG_WIDTH-1,
+            .right = 0
+        }; // Starts inverted
+    }
+    for (size_t i = 0; i < colorImg->len; i+=3) {
         Color c = pixelColor(img->buf[i], img->buf[i+1], img->buf[i+2]);
 
         if (c == color) {
+            foundColor = true;
+
+            if (areaOfColor != nullptr) {
+                int x = i/3 % IMG_WIDTH; //TODO: Optimize (incremental tracking)
+                int y = i/3 / IMG_WIDTH;
+
+                if (y-5 < areaOfColor->top) areaOfColor->top = y-5;
+                if (y+5 > areaOfColor->bottom) areaOfColor->bottom = y+5;
+                if (x-5 < areaOfColor->left) areaOfColor->left = x-5;
+                if (x+5 > areaOfColor->right) areaOfColor->right = x+5;
+            }
+
             if (!debug) {
                 colorImg->buf[i] = 255;
                 colorImg->buf[i+1] = 255;
@@ -676,6 +715,13 @@ void selectColor(camera_fb_t* img, camera_fb_t* colorImg, Color color, bool debu
             }
         }
     }
+    if (areaOfColor != nullptr) {
+        if (areaOfColor->top < 0) areaOfColor->top = 0;
+        if (areaOfColor->bottom > IMG_HEIGHT-1) areaOfColor->bottom = IMG_HEIGHT-1;
+        if (areaOfColor->left < 0) areaOfColor->left = 0;
+        if (areaOfColor->right > IMG_WIDTH-1) areaOfColor->right = IMG_WIDTH-1;
+    }
+    return foundColor;
 }
 
 template <typename T> //uint8_t or uint16_t
@@ -867,7 +913,9 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
     }
 }
 
-void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
+void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r, ImgAreaOfInterest *area) {
+    resetImg(pOutImg);
+
     if (pInImg->format != PIXFORMAT_GRAYSCALE && pOutImg->format != PIXFORMAT_GRAYSCALE) {
         ESP_LOGE(CAM, "Hough transform can only be used on grayscale images");
         vTaskDelay(pdMS_TO_TICKS(10000));
@@ -878,40 +926,36 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r) {
         vTaskDelay(pdMS_TO_TICKS(10000));
         ESP.restart();
     }
-  
-    resetImg(pOutImg);
-  
+    
     uint8_t *inBuf = pInImg->buf;
+
+    size_t minY = 0;
+    size_t maxY = pInImg->height-1;
+    size_t minX = 0;
+    size_t maxX = pInImg->width-1;
+
+    if (area != nullptr) {
+        minY = std::max<int>(minY, area->top);
+        maxY = std::min<int>(maxY, area->bottom);
+        minX = std::max<int>(minX, area->left);
+        maxX = std::min<int>(maxX, area->right);
+    }
   
-    for (int y = 0; y < pInImg->height; y++) {
-        for (int x = 0; x < pInImg->width; x++) {
-            if (inBuf[(pInImg->width)*y+x] > 0) {
-            drawCircle<uint16_t>(pOutImg, x, y, r, inBuf[(pInImg->width)*y+x]);
+    for (int y = minY*pInImg->width; y <= maxY*pInImg->width; y+=pInImg->width) {
+        for (int x = minX; x <= maxX; x++) {
+            if (inBuf[y+x] > 0) {
+            drawCircle<uint16_t>(pOutImg, x, y/pInImg->width, r, inBuf[y+x]);
             }
         }
     }
-
-    // Normalizing to uint8_t
-    // uint16_t *in = reinterpret_cast<uint16_t*>(uint16Img.buf), *inStart = in; uint8_t *out = pOutImg->buf;
-    // int maxVal = *std::max_element(in, in+(uint16Img.len/2));
-    // int d = std::max(maxVal/255 + ((maxVal/255)*maxVal < 256 ? 0 : 1), 1);
-    
-    // for (; in - inStart < uint16Img.len/2 && out - pOutImg->buf < pOutImg->len; in++, out++) {
-    //   if (*in / d >= 256) {
-    //     ESP_LOGE(CAM, "Value exceeds uint8_t max");
-    //     vTaskDelay(pdMS_TO_TICKS(10000));
-    //     ESP.restart(); 
-    //   }
-    //   *out = static_cast<uint8_t>(*in/d);
-    // }
 }
 
 //minR and maxR are inclusive; pOutmgs should be a pointer to a uint8 camera frame camera_fb_t's
-int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pFinalImg, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels) {
+int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pFinalImg, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels, ImgAreaOfInterest *area) {
     int bestR = minR;
     Pixel maxPixel = {0,0,0}, curPixel;
     for (int r = minR, i = 0; r <= maxR; r++, i++) {
-        houghTransform(pInImg, &uint16Img, r);
+        houghTransform(pInImg, &uint16Img, r, area);
         (*pMaxPixels)[i].reserve(10);
         pixelsAboveThreshold<uint16_t>(&uint16Img, &((*pMaxPixels)[i]), 8'192); // 8192, 12288, 16384, 20480
         
@@ -1043,43 +1087,32 @@ void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Colo
     for (auto& [color, balls] : *pFinal_balls) {
         balls.clear();
         for (auto& pixels : maxPixels) pixels.clear();
-        
-        selectColor(&rgb888Img, &colorImg, color);
+        ImgAreaOfInterest areaOfInterest;
+        bool foundColor = selectColor(&rgb888Img, &colorImg, color, &areaOfInterest);
+        LOG_V("MAIN", "T:%d B: %d L: %d R:%d\n", areaOfInterest.top, areaOfInterest.bottom, areaOfInterest.left, areaOfInterest.right);
         timer.recordCheckpoint("selectColor");
 
+        if (foundColor) {
+            calculateGradBuffer(&colorImg, &gradImg, &areaOfInterest);
+            timer.recordCheckpoint("calcGradBuffer");
 
-        calculateGradBuffer(&colorImg, &gradImg);
-        timer.recordCheckpoint("calcGradBuffer");
+            bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels, &areaOfInterest); //TODO: consider balls from multiple rads
+            timer.recordCheckpoint("multipleHoughTransform");
 
-        bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels); //TODO: consider balls from multiple rads
-        timer.recordCheckpoint("multipleHoughTransform");
-        
-        Serial.printf("\t[%.*s]\n", colorStringMap[color].size(), colorStringMap[color].data());
-        if (!maxPixels[bestR-MIN_RAD].empty()) {
-            // Serial.printf("\t\tBestR: %d\n", bestR);
-            // for (int r = MIN_RAD; r <= MAX_RAD; r++) {
-            //     if (maxPixels[r-MIN_RAD].empty()) continue;
-            //     // Serial.printf("\t\tRadius %d:", r);
-            //     auto &curMaxPixels = maxPixels[r-MIN_RAD];
-            //     for (auto p = curMaxPixels.begin(); p < curMaxPixels.begin() + std::min<size_t>(curMaxPixels.size(), 3); p++) {
-            //         Serial.printf("\t(%d, %d): %d", p->x, p->y, p->i);
-            //     }
-            //     // for (const Pixel& p : maxPixels[r-MIN_RAD]) {
-            //     //     Serial.printf("\t(%d, %d): %d", p.x, p.y, p.i);
-            //     // }
-            //     Serial.print("\n");
-            // }
-            // Serial.print("\n");
-
-            ballsFromPixels(&maxPixels, &balls);
-            for (auto& ball : balls) drawCircle<uint8_t>(&circleImg, ball.x, ball.y, ball.r, 250);
-
+            if (!maxPixels[bestR-MIN_RAD].empty()) {
+                ballsFromPixels(&maxPixels, &balls);
+                for (auto& ball : balls) drawCircle<uint8_t>(&circleImg, ball.x, ball.y, ball.r, 250);
+            }
+            else {
+                Serial.println("\tNo circles detected");
+            }
+            applyMask(&outputImg, &gradImg, 120, &(colorShadesMap[color][1]), 70);
+            applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[color][0]), 50);
         }
         else {
-            Serial.println("\tNo circles detected");
+            LOG_I("MAIN", "No color found. Skipped vision algorighthms");
         }
-        applyMask(&outputImg, &gradImg, 120, &(colorShadesMap[color][0]), 50);
-        applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[color][1]), 50);
+        
 
         resetImg(&circleImg);
         timer.recordCheckpoint("Color loop done");
@@ -1135,7 +1168,7 @@ void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg, Color color) {
     selectColor(&rgb888Img, &colorImg, color);}
 
     {MyFuncTimer _t("DEBUG selectColor()");
-    selectColor(&rgb888Img, &hsvImg, color, true);}
+    selectColor(&rgb888Img, &hsvImg, color, nullptr, true);}
 
     {MyFuncTimer _t("calculateGradBuffer()");
     calculateGradBuffer(&colorImg, &gradImg);}
@@ -1150,12 +1183,18 @@ void setup() {
     vTaskDelay(pdMS_TO_TICKS(1000));
     Serial.begin(115200);
     // Serial.setDebugOutput(true);
+    Logger::init();
+    LOG_ADD_TAG("MAIN", LogLevel::VERBOSE);
 
     ESP_LOGI(CAM, "Began");
     checkMem("Began", 1);
 
     if (psramFound())   ESP_LOGD(CAM, "PSRAM initialized correctly");
-    else                {ESP_LOGW(CAM, "PSRAM not available"); delay(10000); ESP.restart();}
+    else {
+        ESP_LOGW(CAM, "PSRAM not available"); 
+        delay(10000); 
+        ESP.restart();
+    }
 
     ESP_LOGD(CAM, "Allocating Img Buffers");
     allocate_camera_fbs({&rgb888Img, &colorImg, &grayImg, &gradImg, &uint16Img, &hsvImg, &circleImg, &finalHoughImg, &outputImg});
