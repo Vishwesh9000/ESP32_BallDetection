@@ -18,6 +18,7 @@
 #include <tuple>
 #include <string>
 #include <type_traits>
+#include <span>
 
 #include "esp_log.h"
 
@@ -70,6 +71,10 @@ static camera_config_t camera_config = {
 
 
 enum class Color {Red, Blue, Black, Brown, Other, _NUM_COLORS};
+
+
+
+
 constexpr auto _NumColors = static_cast<std::underlying_type_t<Color>>(Color::_NUM_COLORS);
 struct colorStringsStruct {
     static constexpr std::array<std::string_view, _NumColors> rawStrings{{
@@ -127,11 +132,19 @@ constexpr ColorShadesStruct colorShadesMap {{{
 
 std::unordered_map<Color, int> ballCounts;
 
-struct ImgAreaOfInterest {
+struct ImgArea {
     int top;
     int bottom;
     int left;
     int right;
+    
+    static void reset(ImgArea& area) {
+        // Starts inverted
+        area.top = 0;
+        area.bottom = IMG_HEIGHT - 1;
+        area.left = 0;
+        area.right = IMG_WIDTH - 1;
+    }
 };
 
 
@@ -204,9 +217,12 @@ struct Ball {
         x(p.x), y(p.y), r(rad), i(p.i){}
 };
 
+
+constexpr size_t jpgImgMaxSize = 12'000;
 constexpr camera_fb_t rgbImgTemplate =  {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*3, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_RGB888, .timestamp={0,0}},
                 grayscaleImgTemplate =  {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}},
-                uint16ImgTemplate =     {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}};
+                uint16ImgTemplate =     {.buf=nullptr, .len=IMG_HEIGHT*IMG_WIDTH*2, .width=IMG_WIDTH, .height=IMG_HEIGHT,.format=PIXFORMAT_GRAYSCALE, .timestamp={0,0}},
+                jpgImgTemplate = {.buf=nullptr, .len = jpgImgMaxSize, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_JPEG, .timestamp={0,0}};
 
 camera_fb_t rgb888Img = rgbImgTemplate;
 camera_fb_t colorImg = rgbImgTemplate;
@@ -215,6 +231,10 @@ camera_fb_t gradImg = grayscaleImgTemplate;
 camera_fb_t uint16Img = uint16ImgTemplate;
 camera_fb_t outputImg = rgbImgTemplate;
 camera_fb_t jpgImg = {.buf=nullptr, .len=0, .width=IMG_WIDTH, .height=IMG_HEIGHT, .format=PIXFORMAT_JPEG, .timestamp={0,0}};
+constexpr size_t numJpgs = 3;
+camera_fb_t jpgImgs[numJpgs];
+
+
 
 camera_fb_t hsvImg = rgbImgTemplate;
 camera_fb_t circleImg = grayscaleImgTemplate;
@@ -516,7 +536,7 @@ void applyMask(camera_fb_t* pInImg, camera_fb_t *pMaskImg, int threshold, const 
 } 
 
 
-void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2, ImgAreaOfInterest *area = nullptr) {
+void calculateGradBuffer(camera_fb_t *img, camera_fb_t *img2, ImgArea *area = nullptr) {
     resetImg(img2); 
     
     resetImg(&uint16Img);
@@ -653,22 +673,17 @@ Color pixelColor(int r, int g, int b) {
     return Color::Other;
 }
 
-bool selectColor(camera_fb_t* img, camera_fb_t* colorImg, Color color, ImgAreaOfInterest *areaOfColor = nullptr, bool debug = false) {
-    resetImg(colorImg);
-
-    bool foundColor = false;
-    if (areaOfColor != nullptr) {
-        *areaOfColor = {
-            .top = IMG_HEIGHT-1,
-            .bottom = 0,
-            .left = IMG_WIDTH-1,
-            .right = 0
-        }; // Starts inverted
+bool selectColor(camera_fb_t* img, camera_fb_t* colorImg, std::span<const Color> colors, ImgArea *areaOfColor = nullptr, bool debug = false) {
+    int colorMask = 0;
+    for (Color color : colors) {
+        colorMask |= 1 << static_cast<int>(color);
     }
+    
+    bool foundColor = false;
     for (size_t i = 0; i < colorImg->len; i+=3) {
         Color c = pixelColor(img->buf[i], img->buf[i+1], img->buf[i+2]);
 
-        if (c == color) {
+        if (colorMask & (1 << static_cast<int>(c)) != 0) {
             foundColor = true;
 
             if (areaOfColor != nullptr) {
@@ -913,7 +928,7 @@ void drawCircle(camera_fb_t *fb, int cx, int cy, int r, uint32_t intensity) {
     }
 }
 
-void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r, ImgAreaOfInterest *area) {
+void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r, ImgArea *area) {
     resetImg(pOutImg);
 
     if (pInImg->format != PIXFORMAT_GRAYSCALE && pOutImg->format != PIXFORMAT_GRAYSCALE) {
@@ -951,7 +966,7 @@ void houghTransform(camera_fb_t *pInImg, camera_fb_t *pOutImg, int r, ImgAreaOfI
 }
 
 //minR and maxR are inclusive; pOutmgs should be a pointer to a uint8 camera frame camera_fb_t's
-int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pFinalImg, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels, ImgAreaOfInterest *area) {
+int multipleHoughTransform(camera_fb_t *pInImg, camera_fb_t *pFinalImg, int minR, int maxR, std::vector<std::vector<Pixel>> *pMaxPixels, ImgArea *area) {
     int bestR = minR;
     Pixel maxPixel = {0,0,0}, curPixel;
     for (int r = minR, i = 0; r <= maxR; r++, i++) {
@@ -1049,115 +1064,62 @@ bool sendLogViaWiFi(const char* msg, ...) {
 
 bool sendImgViaWiFi(camera_fb_t *img) {
     if (updateClientConnection()) {
-        updateJPGBuffer(img);
-        int32_t len = static_cast<int32_t>(jpgImg.len);
+        if (img->format != PIXFORMAT_JPEG) {
+            updateJPGBuffer(img);
+            img = &jpgImg;
+        }
+        int32_t len = static_cast<int32_t>(img->len);
         client.write("MS", 2); // Message Start
         client.write(0x02); // Image Message Identifier
         client.write(reinterpret_cast<const uint8_t*>(&len), sizeof(len)); //4 bytes (signed because of python)
-        client.write(jpgImg.buf, len);
+        client.write(img->buf, len);
         return true;
     }
     else return false;
 }
 
-void analyzeImg(camera_fb_t* pFb, camera_fb_t **pOutImg, std::unordered_map<Color, std::vector<Ball>> *pFinal_balls) {
-    Timer timer("analyzeImg()");
+void analyzeImg(std::unordered_map<Color, std::vector<Ball>> *finalBalls) {
+    Timer timer("analyzeImg()", LogLevel::VERBOSE);
 
-    static bool initArray = false;
-    static std::unordered_map<Color, std::vector<int>> ballCounts;
-    static std::unordered_map<Color, int> curBallCount;
-    if (!initArray) {
-        for (auto [color, _] : *pFinal_balls) {
-            ballCounts[color] = {};
-        }
-        initArray = true;
+    camera_fb_t *fb;
+    fb = camera_capture();
+    timer.recordCheckpoint("Camera Capture");
+    updateRGBBuffer(fb);
+    timer.recordCheckpoint("Convert to RGB");
+    ImgArea area;
+    ImgArea::reset(area);
+    bool foundColor = false;
+    for (const auto& [color, balls] : *finalBalls) {
+        foundColor |= selectColor(&rgb888Img, &colorImg, color, &area);
     }
-    
-    static std::vector<std::vector<Pixel>> maxPixels(MAX_RAD-MIN_RAD+1); 
-    int bestR;
-    resetImg(&circleImg);
-
-    timer.recordCheckpoint("setup");
-    updateRGBBuffer(pFb);
-    timer.recordCheckpoint("updateRGBBuffer");
-
-    memcpy(outputImg.buf, rgb888Img.buf, rgb888Img.len);
-    
-    Serial.println("Pixels:");
-    for (auto& [color, balls] : *pFinal_balls) {
-        balls.clear();
-        for (auto& pixels : maxPixels) pixels.clear();
-        ImgAreaOfInterest areaOfInterest;
-        bool foundColor = selectColor(&rgb888Img, &colorImg, color, &areaOfInterest);
-        LOG_V("MAIN", "T:%d B: %d L: %d R:%d\n", areaOfInterest.top, areaOfInterest.bottom, areaOfInterest.left, areaOfInterest.right);
-        timer.recordCheckpoint("selectColor");
-
-        if (foundColor) {
-            calculateGradBuffer(&colorImg, &gradImg, &areaOfInterest);
-            timer.recordCheckpoint("calcGradBuffer");
-
-            bestR = multipleHoughTransform(&gradImg, &finalHoughImg, MIN_RAD, MAX_RAD, &maxPixels, &areaOfInterest); //TODO: consider balls from multiple rads
-            timer.recordCheckpoint("multipleHoughTransform");
-
-            if (!maxPixels[bestR-MIN_RAD].empty()) {
-                ballsFromPixels(&maxPixels, &balls);
-                for (auto& ball : balls) drawCircle<uint8_t>(&circleImg, ball.x, ball.y, ball.r, 250);
-            }
-            else {
-                Serial.println("\tNo circles detected");
-            }
-            applyMask(&outputImg, &gradImg, 120, &(colorShadesMap[color][1]), 70);
-            applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[color][0]), 50);
+    if (foundColor == false) {
+        LOG_D("MAIN", "No ball colors found, skipping processing");
+        if (sendImgViaWiFi(fb)) {
+            LOG_D("MAIN", "Sent image via WiFi");
         }
         else {
-            LOG_I("MAIN", "No color found. Skipped vision algorighthms");
+            LOG_D("MAIN", "No client, delaying ...");
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
-        
-
-        resetImg(&circleImg);
-        timer.recordCheckpoint("Color loop done");
+        esp_camera_fb_return(fb);
+        return;
     }
-    Serial.println("Balls:");
-    for (const auto& [color, balls] : *pFinal_balls) {
-        Serial.printf("\t%.*s: %d ball(s)\n", colorStringMap[color].size(), colorStringMap[color].data(), balls.size());
-        sendLogViaWiFi("%.*s: %d ball(s)", colorStringMap[color].size(), colorStringMap[color].data(), balls.size());
-        for (const auto& ball : balls) {
-            Serial.printf("\t\t(%d,%d): %d\n", ball.x, ball.y, ball.i);
+    memcpy(jpgImgs[0].buf, fb->buf, fb->len);
+    jpgImgs[0] = *fb;
+    esp_camera_fb_return(fb);
+    for (int i = 1; i < jpgImgMaxSize; i++) {
+        fb = camera_capture();
+        memcpy(jpgImgs[i].buf, fb->buf, fb->len);
+        jpgImgs[i] = *fb;
+        esp_camera_fb_return(fb);
+    } 
+    for (int i = 0; i < jpgImgMaxSize; i++) {
+        bool shouldProcess;
+        if (i!=0) {
+            shouldProcess = selectColor(jpgImgs+1, &colorImg, )
         }
-    }
-    timer.recordCheckpoint("Image Processing Done");
-
-    //Update tracker
-    int totalBalls = 0;
-    static bool detectedBalls = false;
-    for (auto [color, balls] : *pFinal_balls) {
-        ballCounts[color].push_back(balls.size());
-        totalBalls += balls.size();
     }
 
-    if (totalBalls == 0) {
-        if (detectedBalls) {
-            for (auto& [color, balls] : ballCounts) {
-                balls.pop_back();
-                std::sort(balls.begin(), balls.end());
-                Serial.printf("Final %.*s: %d", colorStringMap[color].size(), colorStringMap[color].data(), balls[balls.size()/2]);
-                sendLogViaWiFi("Final %.*s: %d", colorStringMap[color].size(), colorStringMap[color].data(), balls[balls.size()/2]);
-                balls.clear();
-            }
-            detectedBalls = false;
-        }
-        for (auto& [color, balls] : ballCounts) {
-            balls.clear();
-        }
-
-    }
-    else {
-        detectedBalls = true;
-    }
-    timer.recordCheckpoint("Tracking");
-    drawGuideCircles<uint8_t>(&circleImg, 200);
-    applyMask(&outputImg, &circleImg, 120, &(colorShadesMap[Color::Other][1]), 50);
-    *pOutImg = &outputImg;
 }
 
 void tuneColorThresholds(camera_fb_t *pFb, camera_fb_t **pOutImg, Color color) {
@@ -1195,7 +1157,10 @@ void setup() {
         delay(10000); 
         ESP.restart();
     }
-
+    for (size_t i = 0; i < numJpgs; i++) {
+        jpgImgs[i] = jpgImgTemplate;
+        allocate_camera_fb(jpgImgs+i);
+    }
     ESP_LOGD(CAM, "Allocating Img Buffers");
     allocate_camera_fbs({&rgb888Img, &colorImg, &grayImg, &gradImg, &uint16Img, &hsvImg, &circleImg, &finalHoughImg, &outputImg});
     
@@ -1246,29 +1211,10 @@ void setup() {
 void loop() {
     static camera_fb_t *finalImg;
     static std::unordered_map<Color, std::vector<Ball>> balls = {{Color::Blue, {}}, /*{Color::Black, {}},*/ {Color::Red, {}}};
-
-    MyFuncTimer _t("LOOP");
-    // ESP_LOGI(CAM, "LOOPING");
-    ESP_LOGV(CAM, "cam_task stack watermark: %d bytes\n", uxTaskGetStackHighWaterMark(NULL));
-
-    camera_fb_t *fb;
-    {MyFuncTimer _t("camera_capture()");
-    fb = camera_capture();}
-    analyzeImg(fb, &finalImg, &balls);
+    static Timer timer("Loop", LogLevel::VERBOSE);
+    analyzeImg(&balls);
     // tuneColorThresholds(fb, &finalImg, Color::Blue);
 
-    ESP_LOGD(CAM, "Finished processing");
-    checkMem("After Processing");
-
-    if (sendImgViaWiFi(finalImg)) {
-        ESP_LOGD(CAM, "Sent image via WiFi");
-    }
-    else {
-        ESP_LOGD(CAM, "No client, delaying ...");
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    esp_camera_fb_return(fb);
     vTaskDelay(pdMS_TO_TICKS(50)); 
-    checkMem("After Delay");
+    timer.recordCheckpoint("Looped");
 }
